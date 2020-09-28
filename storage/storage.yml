@@ -11,8 +11,9 @@ Conditions:
 Resources:
   # S3 Buckets
   InfrastructureSupportBucket:
-    Type: "AWS::S3::Bucket"
+    Type: AWS::S3::Bucket
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BucketName: !Sub ${BucketNamePrefix}-${AWS::Region}-support
       Tags:
@@ -25,8 +26,9 @@ Resources:
       VersioningConfiguration:
         Status: Suspended
   InfrastructureSourceBucket:
-    Type: "AWS::S3::Bucket"
+    Type: AWS::S3::Bucket
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BucketName: !Sub ${BucketNamePrefix}-${AWS::Region}-source
       Tags:
@@ -39,8 +41,9 @@ Resources:
       VersioningConfiguration:
         Status: Suspended
   InfrastructureConfigBucket:
-    Type: "AWS::S3::Bucket"
+    Type: AWS::S3::Bucket
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BucketName: !Sub ${BucketNamePrefix}-${AWS::Region}-config
       Tags:
@@ -53,8 +56,9 @@ Resources:
       VersioningConfiguration:
         Status: Enabled
   InfrastructureSnapshotsBucket:
-    Type: "AWS::S3::Bucket"
+    Type: AWS::S3::Bucket
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BucketName: !Sub ${BucketNamePrefix}-${AWS::Region}-snapshots
       Tags:
@@ -67,8 +71,9 @@ Resources:
       VersioningConfiguration:
         Status: Suspended
   InfrastructureApplicationCodeBucket:
-    Type: "AWS::S3::Bucket"
+    Type: AWS::S3::Bucket
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BucketName: !Sub ${BucketNamePrefix}-${AWS::Region}-application-code
       Tags:
