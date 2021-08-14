@@ -249,6 +249,8 @@ Resources:
               Value: !GetAtt Constants.SphinxBaseUrl
           Essential: true
           Image: !Ref EcrImageTag
+          LinuxParameters:
+            InitProcessEnabled: true
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -562,6 +564,8 @@ Resources:
               Value: "true"
           Essential: true
           Image: !Ref EcrImageTag
+          LinuxParameters:
+            InitProcessEnabled: true
           LogConfiguration:
             LogDriver: awslogs
             Options:

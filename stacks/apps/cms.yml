@@ -244,6 +244,8 @@ Resources:
               Value: !Sub https://${ElasticsearchDomain.DomainEndpoint}:9200
           Essential: true
           Image: !Ref EcrImageTag
+          LinuxParameters:
+            InitProcessEnabled: true
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -294,6 +296,8 @@ Resources:
               Value: !Ref SharedMemcachedEndpointAddress
           Essential: true
           Image: !Ref EcrImageTag
+          LinuxParameters:
+            InitProcessEnabled: true
           LogConfiguration:
             LogDriver: awslogs
             Options:
