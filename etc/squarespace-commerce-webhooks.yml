@@ -3,15 +3,12 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Wires up Stripe payments webhooks and the Squarespace Commerce API to allow
   sales notifications to Slack
+
 Parameters:
-  SquarespaceApiToken:
-    Type: String
-  StripeWebhookSigningSecret:
-    Type: String
-  SlackMessageRelayTopicArn:
-    Type: String
-  OpsErrorMessagesSnsTopicArn:
-    Type: String
+  SquarespaceApiToken: { Type: String }
+  StripeWebhookSigningSecret: { Type: String }
+  SlackMessageRelayTopicArn: { Type: String }
+
 Resources:
   # API Gateway
   RestApi:
@@ -95,10 +92,14 @@ Resources:
       Code:
         ZipFile: |
           const https = require('https');
-          const AWS = require('aws-sdk');
+          const { SNS } = require('@aws-sdk/client-sns');
           const url = require('url');
 
           const sns = new AWS.SNS({ apiVersion: '2010-03-31' });
+          const sns = new SNS({
+              apiVersion: '2010-03-31',
+              region: process.env.SLACK_MESSAGE_RELAY_SNS_TOPIC_ARN.split(':')[3]
+          });
 
           const SLACK_CHANNEL = '#garage-registration';
           const SLACK_USERNAME = 'Squarespace';
@@ -191,7 +192,7 @@ Resources:
                                   `<mailto:${order.customerEmail}|${order.billingAddress.firstName} ${order.billingAddress.lastName}> ordered ${lineItem.quantity} ticket${lineItem.quantity === 1 ? '' : 's' } for *${inventory.descriptor}*`,
                               ].join('\n')
                           }),
-                      }).promise();
+                      });
                   }
 
                   return { statusCode: 200, headers: {}, body: '' };
@@ -209,7 +210,7 @@ Resources:
       Handler: index.handler
       MemorySize: 128
       Role: !GetAtt LambdaIamRole.Arn
-      Runtime: nodejs12.x
+      Runtime: nodejs18.x
       Tags:
         - Key: Project
           Value: Misc
@@ -228,14 +229,7 @@ Resources:
   LambdaErrorAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      ActionsEnabled: true
-      AlarmName: "[Squarespace][Lambda][Error] Invocation 4XX"
-      AlarmActions:
-        - !Ref OpsErrorMessagesSnsTopicArn
-      InsufficientDataActions:
-        - !Ref OpsErrorMessagesSnsTopicArn
-      OKActions:
-        - !Ref OpsErrorMessagesSnsTopicArn
+      AlarmName: !Sub ERROR [Squarespace] Commerce webhook <prod> INVOCATION ERRORS (${AWS::StackName})
       AlarmDescription: The error rate on the Squarespace sales lambda has exceeded 0
       ComparisonOperator: GreaterThanThreshold
       EvaluationPeriods: 1

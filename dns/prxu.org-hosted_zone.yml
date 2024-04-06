@@ -10,21 +10,21 @@ Parameters:
     Type: String
 
 Resources:
-  HostedZone:
+  HostedZone2:
     Type: AWS::Route53::HostedZone
     Properties:
       HostedZoneConfig:
         Comment: User-generated Content
       HostedZoneTags:
-        - Key: prx:cloudformation:stack-name
-          Value: !Ref AWS::StackName
-        - Key: prx:cloudformation:stack-id
-          Value: !Ref AWS::StackId
-        - Key: Project
-          Value: Dovetail
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: Common }
       Name: !Ref Domain
 
-  Text:
+  # Purpose-based
+  Text2:
     Type: AWS::Route53::RecordSetGroup
     Properties:
       # Route53 expects TXT record values to be enclosed in double quotes, so in
@@ -33,79 +33,23 @@ Resources:
       # resource records if necessary.
       # All SPF records need to go into a single resource record.
       Comment: TXT Records
-      HostedZoneId: !Ref HostedZone
+      HostedZoneId: !Ref HostedZone2
       RecordSets:
-        - ResourceRecords:
+        - Name: !Sub ${Domain}
+          ResourceRecords:
+            # Domain verification
             - '"google-site-verification=Pf-eBkvyUCL52x_xXMV6xqYWkuN39NOULOPwGS6IM0M"'
           TTL: "300"
           Type: TXT
-          Name: !Sub ${Domain}
-        - ResourceRecords:
-            - '"R69rwoxwHEe6ubbq/suATEEFndpJN2M/uGpqqmP4kHE="'
-          TTL: "300"
-          Type: TXT
-          Name: !Sub _amazonses.${Domain}
-        - ResourceRecords:
-            - '"Kr2tQaG5"'
-          TTL: "1800"
-          Type: TXT
-          Name: !Sub dzc.${Domain}
-  Dovetail:
-    Type: AWS::Route53::RecordSetGroup
-    Properties:
-      Comment: Dovetail
-      HostedZoneId: !Ref HostedZone
-      RecordSets:
-        - Type: A
-          Name: !Sub dovetail.${Domain}
-          AliasTarget:
-            DNSName: dualstack.infrast-Alb-10F27POU1UGCM-1595523165.us-east-1.elb.amazonaws.com.
-            HostedZoneId: Z35SXDOTRQ7X7K
-        - Type: AAAA
-          Name: !Sub dovetail.${Domain}
-          AliasTarget:
-            DNSName: dualstack.infrast-Alb-10F27POU1UGCM-1595523165.us-east-1.elb.amazonaws.com.
-            HostedZoneId: Z35SXDOTRQ7X7K
-
-        - Type: A
-          Name: !Sub dovetail-router.${Domain}
-          AliasTarget:
-            DNSName: dualstack.infrast-Alb-10F27POU1UGCM-1595523165.us-east-1.elb.amazonaws.com.
-            HostedZoneId: Z35SXDOTRQ7X7K
-        - Type: AAAA
-          Name: !Sub dovetail-router.${Domain}
-          AliasTarget:
-            DNSName: dualstack.infrast-Alb-10F27POU1UGCM-1595523165.us-east-1.elb.amazonaws.com.
-            HostedZoneId: Z35SXDOTRQ7X7K
-
-        - Type: A
-          Name: !Sub dovetail.staging.${Domain}
-          AliasTarget:
-            DNSName: dualstack.infrast-Alb-AL6G9YR36Q2W-1508457227.us-east-1.elb.amazonaws.com.
-            HostedZoneId: Z35SXDOTRQ7X7K
-        - Type: AAAA
-          Name: !Sub dovetail.staging.${Domain}
-          AliasTarget:
-            DNSName: dualstack.infrast-Alb-AL6G9YR36Q2W-1508457227.us-east-1.elb.amazonaws.com.
-            HostedZoneId: Z35SXDOTRQ7X7K
-
-        - Type: A
-          Name: !Sub dovetail-router.staging.${Domain}
-          AliasTarget:
-            DNSName: dualstack.infrast-Alb-AL6G9YR36Q2W-1508457227.us-east-1.elb.amazonaws.com.
-            HostedZoneId: Z35SXDOTRQ7X7K
-        - Type: AAAA
-          Name: !Sub dovetail-router.staging.${Domain}
-          AliasTarget:
-            DNSName: dualstack.infrast-Alb-AL6G9YR36Q2W-1508457227.us-east-1.elb.amazonaws.com.
-            HostedZoneId: Z35SXDOTRQ7X7K
-  Mx:
+  Email:
     Type: AWS::Route53::RecordSetGroup
     Properties:
       Comment: MX Records
-      HostedZoneId: !Ref HostedZone
+      HostedZoneId: !Ref HostedZone2
       RecordSets:
-        - ResourceRecords:
+        # Email exchange
+        - Name: !Ref Domain
+          ResourceRecords:
             - 1 ASPMX.L.GOOGLE.COM.
             - 5 ALT1.ASPMX.L.GOOGLE.COM.
             - 5 ALT2.ASPMX.L.GOOGLE.COM.
@@ -113,83 +57,170 @@ Resources:
             - 10 ASPMX3.GOOGLEMAIL.COM.
           TTL: "300"
           Type: MX
-          Name: !Ref Domain
-  CloudFront:
+  DovetailCdn:
     Type: AWS::Route53::RecordSetGroup
     Properties:
-      Comment: CloudFront
-      HostedZoneId: !Ref HostedZone
+      Comment: Dovetail CDN
+      HostedZoneId: !Ref HostedZone2
       RecordSets:
-        - Type: A
-          Name: !Sub dovetail3-cdn.${Domain}
-          AliasTarget:
-            DNSName: dnn8q9ngse2p0.cloudfront.net
-            HostedZoneId: Z2FDTNDATAQYW2
-        - Type: AAAA
-          Name: !Sub dovetail3-cdn.${Domain}
-          AliasTarget:
-            DNSName: dnn8q9ngse2p0.cloudfront.net
-            HostedZoneId: Z2FDTNDATAQYW2
-
-        - Type: A
-          Name: !Sub dovetail3-cdn-staging.${Domain}
-          AliasTarget:
-            DNSName: d2vjhk8ufcn168.cloudfront.net
-            HostedZoneId: Z2FDTNDATAQYW2
-        - Type: AAAA
-          Name: !Sub dovetail3-cdn-staging.${Domain}
-          AliasTarget:
-            DNSName: d2vjhk8ufcn168.cloudfront.net
-            HostedZoneId: Z2FDTNDATAQYW2
-
-        - Type: A
-          Name: !Sub ryan-cdn.${Domain}
-          AliasTarget:
-            DNSName: d3l72zpcrodhix.cloudfront.net
-            HostedZoneId: Z2FDTNDATAQYW2
-        - Type: AAAA
-          Name: !Sub ryan-cdn.${Domain}
-          AliasTarget:
-            DNSName: d3l72zpcrodhix.cloudfront.net
-            HostedZoneId: Z2FDTNDATAQYW2
-
-        - Type: A
-          Name: !Sub f-staging.${Domain}
-          AliasTarget:
-            DNSName: d2pni491hnsr7.cloudfront.net
-            HostedZoneId: Z2FDTNDATAQYW2
-        - Type: AAAA
-          Name: !Sub f-staging.${Domain}
-          AliasTarget:
-            DNSName: d2pni491hnsr7.cloudfront.net
-            HostedZoneId: Z2FDTNDATAQYW2
-
-        - Type: A
-          Name: !Sub f.${Domain}
-          AliasTarget:
-            DNSName: d32fszakr14ebp.cloudfront.net
-            HostedZoneId: Z2FDTNDATAQYW2
-        - Type: AAAA
-          Name: !Sub f.${Domain}
-          AliasTarget:
-            DNSName: d32fszakr14ebp.cloudfront.net
-            HostedZoneId: Z2FDTNDATAQYW2
-
-        - Type: A
-          Name: !Sub a.${Domain}
-          AliasTarget:
-            DNSName: dqos2vqrtnmab.cloudfront.net
-            HostedZoneId: Z2FDTNDATAQYW2
-        - Type: AAAA
-          Name: !Sub a.${Domain}
-          AliasTarget:
-            DNSName: dqos2vqrtnmab.cloudfront.net
-            HostedZoneId: Z2FDTNDATAQYW2
-  AwsAcmLegacyUsEast1:
+        # Production
+        - AliasTarget:
+            DNSName: d1bqb44r07zanq.cloudfront.net
+            HostedZoneId: Z2FDTNDATAQYW2 # Global CloudFront hosted zone ID
+          Name: !Sub dovetail-cdn.${Domain}
+          Type: A
+        - AliasTarget:
+            DNSName: d1bqb44r07zanq.cloudfront.net
+            HostedZoneId: Z2FDTNDATAQYW2 # Global CloudFront hosted zone ID
+          Name: !Sub dovetail-cdn.${Domain}
+          Type: AAAA
+        # Production (legacy)
+        - Name: !Sub dovetail3-cdn.${Domain}
+          ResourceRecords:
+            - !Sub dovetail-cdn.${Domain}
+          TTL: "3600"
+          Type: CNAME
+        # Staging
+        - AliasTarget:
+            DNSName: dnbicrv831cul.cloudfront.net
+            HostedZoneId: Z2FDTNDATAQYW2 # Global CloudFront hosted zone ID
+          Name: !Sub dovetail-cdn.staging.${Domain}
+          Type: A
+        - AliasTarget:
+            DNSName: dnbicrv831cul.cloudfront.net
+            HostedZoneId: Z2FDTNDATAQYW2 # Global CloudFront hosted zone ID
+          Name: !Sub dovetail-cdn.staging.${Domain}
+          Type: AAAA
+        # Staging (legacy)
+        - Name: !Sub dovetail3-cdn-staging.${Domain}
+          ResourceRecords:
+            - !Sub dovetail-cdn.staging.${Domain}
+          TTL: "3600"
+          Type: CNAME
+  FeederCdn:
     Type: AWS::Route53::RecordSetGroup
     Properties:
-      Comment: AWS ACM validation records for prx-legacy in us-east-1
-      HostedZoneId: !Ref HostedZone
+      Comment: Feeder CDN
+      HostedZoneId: !Ref HostedZone2
+      RecordSets:
+        # Production
+        - AliasTarget:
+            DNSName: d32fszakr14ebp.cloudfront.net
+            HostedZoneId: Z2FDTNDATAQYW2 # Global CloudFront hosted zone ID
+          Name: !Sub f.${Domain}
+          Type: A
+        - AliasTarget:
+            DNSName: d32fszakr14ebp.cloudfront.net
+            HostedZoneId: Z2FDTNDATAQYW2 # Global CloudFront hosted zone ID
+          Name: !Sub f.${Domain}
+          Type: AAAA
+        # Staging
+        - AliasTarget:
+            DNSName: d2pni491hnsr7.cloudfront.net
+            HostedZoneId: Z2FDTNDATAQYW2 # Global CloudFront hosted zone ID
+          Name: !Sub f-staging.${Domain}
+          Type: A
+        - AliasTarget:
+            DNSName: d2pni491hnsr7.cloudfront.net
+            HostedZoneId: Z2FDTNDATAQYW2 # Global CloudFront hosted zone ID
+          Name: !Sub f-staging.${Domain}
+          Type: AAAA
+        # Development
+        - AliasTarget:
+            DNSName: d2py5fpltyagvk.cloudfront.net
+            HostedZoneId: Z2FDTNDATAQYW2 # Global CloudFront hosted zone ID
+          Name: !Sub f.development.${Domain}
+          Type: A
+        - AliasTarget:
+            DNSName: d2py5fpltyagvk.cloudfront.net
+            HostedZoneId: Z2FDTNDATAQYW2 # Global CloudFront hosted zone ID
+          Name: !Sub f.development.${Domain}
+          Type: AAAA
+  AdFilesCdn:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      Comment: Ad files CDN
+      HostedZoneId: !Ref HostedZone2
+      RecordSets:
+        - AliasTarget:
+            DNSName: dqos2vqrtnmab.cloudfront.net
+            HostedZoneId: Z2FDTNDATAQYW2 # Global CloudFront hosted zone ID
+          Name: !Sub a.${Domain}
+          Type: A
+        - AliasTarget:
+            DNSName: dqos2vqrtnmab.cloudfront.net
+            HostedZoneId: Z2FDTNDATAQYW2 # Global CloudFront hosted zone ID
+          Name: !Sub a.${Domain}
+          Type: AAAA
+  AuthenticatedFeedProxy:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      Comment: Authenticated feed proxy
+      HostedZoneId: !Ref HostedZone2
+      RecordSets:
+        # Production
+        - Name: !Sub p.${Domain}
+          ResourceRecords:
+            - p.u.prx.tech.
+          TTL: "3600"
+          Type: CNAME
+        # Staging
+        - Name: !Sub p.staging.${Domain}
+          ResourceRecords:
+            - p.staging.u.prx.tech.
+          TTL: "3600"
+          Type: CNAME
+  DevelopmentSandboxCdn:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      Comment: Development sandbox CDN
+      HostedZoneId: !Ref HostedZone2
+      RecordSets:
+        - AliasTarget:
+            DNSName: d3l72zpcrodhix.cloudfront.net
+            HostedZoneId: Z2FDTNDATAQYW2 # Global CloudFront hosted zone ID
+          Name: !Sub ryan-cdn.${Domain}
+          Type: A
+        - AliasTarget:
+            DNSName: d3l72zpcrodhix.cloudfront.net
+            HostedZoneId: Z2FDTNDATAQYW2 # Global CloudFront hosted zone ID
+          Name: !Sub ryan-cdn.${Domain}
+          Type: AAAA
+  DovetailRouter:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      Comment: Dovetail Router
+      HostedZoneId: !Ref HostedZone2
+      RecordSets:
+        # Production
+        - Name: !Sub dovetail-router.${Domain}
+          ResourceRecords:
+            - dovetail-router.u.prx.tech.
+          TTL: "30"
+          Type: CNAME
+        - Name: !Sub dovetail.${Domain}
+          ResourceRecords:
+            - dovetail-router.u.prx.tech.
+          TTL: "30"
+          Type: CNAME
+        # Staging
+        - Name: !Sub dovetail-router.staging.${Domain}
+          ResourceRecords:
+            - dovetail-router.staging.u.prx.tech.
+          TTL: "30"
+          Type: CNAME
+        - Name: !Sub dovetail.staging.${Domain}
+          ResourceRecords:
+            - dovetail-router.staging.u.prx.tech.
+          TTL: "30"
+          Type: CNAME
+
+  # Service-specific
+  AwsAcmLegacy:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      Comment: AWS ACM validation records for prx-legacy
+      HostedZoneId: !Ref HostedZone2
       RecordSets:
         # *.prxu.org
         - Name: !Sub _4523c88a53cb676ba587436bd336533a.${Domain}
@@ -239,10 +270,16 @@ Resources:
             - _b91071c10a4b4ac682e4556bbca3f2f1.ltfvzjuylp.acm-validations.aws.
           TTL: "3600"
           Type: CNAME
-        # dovetail-cdn-staging.prxu.org
+        # dovetail3-cdn-staging.prxu.org
         - Name: !Sub _c1b1e485e79ba8aba8cccec10eaba637.dovetail3-cdn-staging.${Domain}
           ResourceRecords:
             - _05fd9745b2d8eadd458ddd56e359a9d6.jddtvkljgg.acm-validations.aws.
+          TTL: "3600"
+          Type: CNAME
+        # dovetail-cdn-test.prxu.org
+        - Name: !Sub _4fff80fd20e8e1edf61d0a3593c909d6.dovetail3-cdn-test.${Domain}
+          ResourceRecords:
+            - _107faa09af9e0eb79f73b6ae0055452f.snfqtctrdh.acm-validations.aws.
           TTL: "3600"
           Type: CNAME
         # a.prxu.org
@@ -279,5 +316,53 @@ Resources:
         - Name: !Sub _13bb9f6900c6191e3567c0f6f4a27877.dovetail-router.staging.${Domain}
           ResourceRecords:
             - _2fdbae4e9cb7f56df7aae0f860e1109f.xtsdcrbgyf.acm-validations.aws.
+          TTL: "3600"
+          Type: CNAME
+        # p.prxu.org
+        - Name: !Sub _949367944f337d1533f87b3f22110df2.p.${Domain}
+          ResourceRecords:
+            - _08b85a90ab488a71951651419b0352ac.yqdvztwmqr.acm-validations.aws.
+          TTL: "3600"
+          Type: CNAME
+        # p.staging.prxu.org
+        - Name: !Sub _3a1d9324ba782f9c8a05b8099d8e4472.p.staging.${Domain}
+          ResourceRecords:
+            - _eda5669d36d76ac7e538f2e157e30d94.yqdvztwmqr.acm-validations.aws.
+          TTL: "3600"
+          Type: CNAME
+  AwsAcmSharedDevelopment:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      Comment: AWS ACM validation records for prx-shared-development
+      HostedZoneId: !Ref HostedZone2
+      RecordSets:
+        # f.development.prxu.org
+        - Name: !Sub _b258c2a0feed82974198d7319dca85dc.f.development.${Domain}
+          ResourceRecords:
+            - _85a14e66a213a78f2984ba12f9e34616.cvxnfrzvtq.acm-validations.aws.
+          TTL: "3600"
+          Type: CNAME
+  AwsAcmDovetailCdnStaging:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      Comment: AWS ACM validation records for prx-dovetail-cdn-staging
+      HostedZoneId: !Ref HostedZone2
+      RecordSets:
+        # dovetail-cdn.staging.prxu.org
+        - Name: !Sub _595c59d72b4b136a1829e7927b63f674.dovetail-cdn.staging.${Domain}
+          ResourceRecords:
+            - _d07ee32e24e26f60594b386ea26d330b.dsmfrbdtqy.acm-validations.aws.
+          TTL: "3600"
+          Type: CNAME
+  AwsAcmDovetailCdnProduction:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      Comment: AWS ACM validation records for prx-dovetail-cdn-production
+      HostedZoneId: !Ref HostedZone2
+      RecordSets:
+        # dovetail-cdn.prxu.org
+        - Name: !Sub _64f798116b7a188089f65b94ed3ac2ba.dovetail-cdn.${Domain}
+          ResourceRecords:
+            - _f419a50a219470f6b631bbdd60f7a136.dsmfrbdtqy.acm-validations.aws.
           TTL: "3600"
           Type: CNAME

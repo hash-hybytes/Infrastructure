@@ -1,3 +1,6 @@
+# devops/porter-cd-pipeline.yml
+# This template is deployed continuously via GitHub Actions.
+#
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 
@@ -5,7 +8,7 @@ Description: >-
   Creates a deployment pipeline in CodePipeline, along with CodeBuild projects
   and other resources needed to support the pipeline, for Porter. The main
   branch of the Porter GitHub repository is continuously deployed to staging.
-  Production requires approval.
+  Production requires manual approval.
 
 Parameters:
   kPackagedTemplateFileName:
@@ -16,12 +19,10 @@ Parameters:
     Type: String
   StagingStackName:
     Type: String
+    Default: porter-staging
   ProductionStackName:
     Type: String
-  TemplateConfigBucketName:
-    Type: String
-  TemplateConfigObject:
-    Type: String
+    Default: porter-production
   SlackMessageRelayTopicArn:
     Type: String
 
@@ -31,29 +32,35 @@ Resources:
     Properties:
       # TODO LifecyclePolicy:
       Tags:
-        - Key: Project
-          Value: Infrastructure
-        - Key: prx:cloudformation:stack-name
-          Value: !Ref AWS::StackName
-        - Key: prx:cloudformation:stack-id
-          Value: !Ref AWS::StackId
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
   TranscodeEcrRepository:
     Type: AWS::ECR::Repository
     Properties:
       Tags:
-        - Key: Project
-          Value: Infrastructure
-        - Key: prx:cloudformation:stack-name
-          Value: !Ref AWS::StackName
-        - Key: prx:cloudformation:stack-id
-          Value: !Ref AWS::StackId
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
 
   # Runs `sam build` and `sam package`, and outputs the resulting
   # CloudFormation template as an artifact.
   SamCodeBuildProjectLogGroup:
     Type: AWS::Logs::LogGroup
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
     Properties:
       RetentionInDays: 14
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
   SamCodeBuildProjectRole:
     Type: AWS::IAM::Role
     Properties:
@@ -65,12 +72,11 @@ Resources:
               Service: codebuild.amazonaws.com
         Version: "2012-10-17"
       Tags:
-        - Key: Project
-          Value: Infrastructure
-        - Key: prx:cloudformation:stack-name
-          Value: !Ref AWS::StackName
-        - Key: prx:cloudformation:stack-id
-          Value: !Ref AWS::StackId
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
   SamCodeBuildProjectPolicy:
     Type: AWS::IAM::Policy
     Properties:
@@ -99,7 +105,7 @@ Resources:
       Description: Builds and packages Porter via SAM for future deployment
       Environment:
         ComputeType: BUILD_GENERAL1_SMALL
-        Image: aws/codebuild/standard:5.0
+        Image: aws/codebuild/standard:7.0
         Type: LINUX_CONTAINER
       LogsConfig:
         CloudWatchLogs:
@@ -129,12 +135,11 @@ Resources:
             name: SamBuildArtifact
         Type: CODEPIPELINE
       Tags:
-        - Key: Project
-          Value: Infrastructure
-        - Key: prx:cloudformation:stack-name
-          Value: !Ref AWS::StackName
-        - Key: prx:cloudformation:stack-id
-          Value: !Ref AWS::StackId
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
       TimeoutInMinutes: 15
 
   # Runs `docker build` for the transcode task image if necessary, and pushes
@@ -142,8 +147,16 @@ Resources:
   # variable called IMAGE_NAME with the Docker image name:tag in all cases.
   TranscodeBuildProjectLogGroup:
     Type: AWS::Logs::LogGroup
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
     Properties:
       RetentionInDays: 14
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
   TranscodeBuildProjectRole:
     Type: AWS::IAM::Role
     Properties:
@@ -155,12 +168,11 @@ Resources:
               Service: codebuild.amazonaws.com
         Version: "2012-10-17"
       Tags:
-        - Key: Project
-          Value: Infrastructure
-        - Key: prx:cloudformation:stack-name
-          Value: !Ref AWS::StackName
-        - Key: prx:cloudformation:stack-id
-          Value: !Ref AWS::StackId
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
   TranscodeBuildProjectPolicy:
     Type: AWS::IAM::Policy
     Properties:
@@ -207,7 +219,7 @@ Resources:
             Value: !Ref AWS::AccountId
           - Name: ECR_REPOSITORY_NAME
             Value: !Ref TranscodeEcrRepository
-        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
         PrivilegedMode: true
         Type: LINUX_CONTAINER
       LogsConfig:
@@ -222,9 +234,6 @@ Resources:
             exported-variables:
               - IMAGE_NAME
           phases:
-            install:
-              runtime-versions:
-                docker: 19
             pre_build:
               commands:
                 - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
@@ -249,12 +258,11 @@ Resources:
                 - export IMAGE_NAME="$imageName"
         Type: CODEPIPELINE
       Tags:
-        - Key: Project
-          Value: Infrastructure
-        - Key: prx:cloudformation:stack-name
-          Value: !Ref AWS::StackName
-        - Key: prx:cloudformation:stack-id
-          Value: !Ref AWS::StackId
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
       TimeoutInMinutes: 15
 
   # Runs `docker build` for the FTP copy task image if necessary, and pushes
@@ -262,8 +270,16 @@ Resources:
   # variable called IMAGE_NAME with the Docker image name:tag in all cases.
   FtpBuildProjectLogGroup:
     Type: AWS::Logs::LogGroup
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
     Properties:
       RetentionInDays: 14
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
   FtpBuildProjectRole:
     Type: AWS::IAM::Role
     Properties:
@@ -275,12 +291,11 @@ Resources:
               Service: codebuild.amazonaws.com
         Version: "2012-10-17"
       Tags:
-        - Key: Project
-          Value: Infrastructure
-        - Key: prx:cloudformation:stack-name
-          Value: !Ref AWS::StackName
-        - Key: prx:cloudformation:stack-id
-          Value: !Ref AWS::StackId
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
   FtpBuildProjectPolicy:
     Type: AWS::IAM::Policy
     Properties:
@@ -310,6 +325,9 @@ Resources:
               - logs:PutLogEvents
             Effect: Allow
             Resource: !GetAtt FtpBuildProjectLogGroup.Arn
+          - Action: ssm:GetParameters
+            Effect: Allow
+            Resource: "*" # TODO
         Version: "2012-10-17"
       PolicyName: PorterFtpBuildProjectPolicy
       Roles:
@@ -327,7 +345,7 @@ Resources:
             Value: !Ref AWS::AccountId
           - Name: ECR_REPOSITORY_NAME
             Value: !Ref FtpEcrRepository
-        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
         PrivilegedMode: true
         Type: LINUX_CONTAINER
       LogsConfig:
@@ -339,15 +357,17 @@ Resources:
         BuildSpec: |-
           version: 0.2
           env:
+            parameter-store:
+              DOCKERHUB_USERNAME: /prx/DOCKERHUB_USERNAME
+              DOCKERHUB_PASSWORD: /prx/DOCKERHUB_PASSWORD
             exported-variables:
               - IMAGE_NAME
           phases:
-            install:
-              runtime-versions:
-                docker: 19
             pre_build:
               commands:
                 - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+                - echo Logging in to Docker Hub...
+                - echo $DOCKERHUB_PASSWORD | docker login --username $DOCKERHUB_USERNAME --password-stdin
             build:
               commands:
                 # Calculate the SHA1 hash of the ftp directory
@@ -369,12 +389,11 @@ Resources:
                 - export IMAGE_NAME="$imageName"
         Type: CODEPIPELINE
       Tags:
-        - Key: Project
-          Value: Infrastructure
-        - Key: prx:cloudformation:stack-name
-          Value: !Ref AWS::StackName
-        - Key: prx:cloudformation:stack-id
-          Value: !Ref AWS::StackId
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
       TimeoutInMinutes: 15
 
   # Runs Porter's acceptance test suite against the staging state machine
@@ -387,17 +406,29 @@ Resources:
         Rules:
           - ExpirationInDays: 1
             Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
       Tags:
-        - Key: Project
-          Value: Infrastructure
-        - Key: prx:cloudformation:stack-name
-          Value: !Ref AWS::StackName
-        - Key: prx:cloudformation:stack-id
-          Value: !Ref AWS::StackId
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
   AcceptanceTestsProjectLogGroup:
     Type: AWS::Logs::LogGroup
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
     Properties:
       RetentionInDays: 14
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
   AcceptanceTestsProjectRole:
     Type: AWS::IAM::Role
     Properties:
@@ -409,12 +440,11 @@ Resources:
               Service: codebuild.amazonaws.com
         Version: "2012-10-17"
       Tags:
-        - Key: Project
-          Value: Infrastructure
-        - Key: prx:cloudformation:stack-name
-          Value: !Ref AWS::StackName
-        - Key: prx:cloudformation:stack-id
-          Value: !Ref AWS::StackId
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
   AcceptanceTestsProjectPolicy:
     Type: AWS::IAM::Policy
     Properties:
@@ -454,7 +484,7 @@ Resources:
         EnvironmentVariables:
           - Name: PORTER_TEST_BUCKET_NAME
             Value: !Ref AcceptanceTestsBucket
-        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
         Type: LINUX_CONTAINER
       LogsConfig:
         CloudWatchLogs:
@@ -465,12 +495,11 @@ Resources:
         BuildSpec: buildspec-acceptance.yml
         Type: CODEPIPELINE
       Tags:
-        - Key: Project
-          Value: Infrastructure
-        - Key: prx:cloudformation:stack-name
-          Value: !Ref AWS::StackName
-        - Key: prx:cloudformation:stack-id
-          Value: !Ref AWS::StackId
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
       TimeoutInMinutes: 15
 
   CloudFormationRole:
@@ -512,12 +541,11 @@ Resources:
             Version: "2012-10-17"
           PolicyName: ResourceManipulationPolicy
       Tags:
-        - Key: Project
-          Value: Infrastructure
-        - Key: prx:cloudformation:stack-name
-          Value: !Ref AWS::StackName
-        - Key: prx:cloudformation:stack-id
-          Value: !Ref AWS::StackId
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
 
   PipelineArtifactStore:
     # The bucket used to store artifacts generated by CodePipeline actions.
@@ -531,13 +559,17 @@ Resources:
         Rules:
           - ExpirationInDays: 14
             Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
       Tags:
-        - Key: Project
-          Value: Infrastructure
-        - Key: prx:cloudformation:stack-name
-          Value: !Ref AWS::StackName
-        - Key: prx:cloudformation:stack-id
-          Value: !Ref AWS::StackId
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
   PipelineRole:
     Type: AWS::IAM::Role
     Properties:
@@ -557,19 +589,6 @@ Resources:
                 Resource: arn:aws:s3:::codepipeline*
             Version: "2012-10-17"
           PolicyName: GenericCodePipelineS3PutPolicy
-        # CodePipeline needs access to objects that are used in source actions
-        - PolicyDocument:
-            Statement:
-              - Action: s3:GetBucketVersioning
-                Effect: Allow
-                Resource: !Sub arn:aws:s3:::${TemplateConfigBucketName}
-              - Action:
-                  - s3:GetObject
-                  - s3:GetObjectVersion
-                Effect: Allow
-                Resource: !Sub arn:aws:s3:::${TemplateConfigBucketName}/${TemplateConfigObject}
-            Version: "2012-10-17"
-          PolicyName: S3SourceActionAccessPolicy
         # Let CodePipeline read and write artifacts
         - PolicyDocument:
             Statement:
@@ -629,12 +648,11 @@ Resources:
             Version: "2012-10-17"
           PolicyName: IamPassRole
       Tags:
-        - Key: Project
-          Value: Infrastructure
-        - Key: prx:cloudformation:stack-name
-          Value: !Ref AWS::StackName
-        - Key: prx:cloudformation:stack-id
-          Value: !Ref AWS::StackId
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
   Pipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
@@ -654,23 +672,10 @@ Resources:
               Configuration:
                 ConnectionArn: !Ref CodeStarConnectionArn
                 FullRepositoryId: PRX/Porter
-                BranchName: master
+                BranchName: main
                 OutputArtifactFormat: CODE_ZIP
               OutputArtifacts:
                 - Name: PorterRepoSourceArtifact
-              RunOrder: 1
-            - Name: TemplateConfig-S3
-              ActionTypeId:
-                Category: Source
-                Owner: AWS
-                Provider: S3
-                Version: "1"
-              Configuration:
-                PollForSourceChanges: false
-                S3Bucket: !Ref TemplateConfigBucketName
-                S3ObjectKey: !Ref TemplateConfigObject
-              OutputArtifacts:
-                - Name: TemplateConfigZipArtifact
               RunOrder: 1
         - Name: Build
           Actions:
@@ -737,16 +742,17 @@ Resources:
                 ParameterOverrides: |
                   {
                     "FtpCopyEcsTaskDefinitionImage": "#{ftp_build.IMAGE_NAME}",
-                    "TranscodeEcsTaskDefinitionImage": "#{transcode_build.IMAGE_NAME}"
+                    "TranscodeEcsTaskDefinitionImage": "#{transcode_build.IMAGE_NAME}",
+                    "EnvironmentType": "Staging",
+                    "EnvironmentTypeAbbreviation": "stag",
+                    "TranscodeJobNamePrefix": "porter-stag-"
                   }
                 RoleArn: !GetAtt CloudFormationRole.Arn
                 StackName: !Ref StagingStackName
-                TemplateConfiguration: TemplateConfigZipArtifact::staging.json
                 # Get the YAML template from `sam package` out of the artifact
                 TemplatePath: !Sub SamBuildArtifact::${kPackagedTemplateFileName}
               InputArtifacts:
                 - Name: SamBuildArtifact
-                - Name: TemplateConfigZipArtifact
               Namespace: staging_deploy
               RunOrder: 1
         - Name: Testing
@@ -796,16 +802,23 @@ Resources:
                 ParameterOverrides: |
                   {
                     "FtpCopyEcsTaskDefinitionImage": "#{ftp_build.IMAGE_NAME}",
-                    "TranscodeEcsTaskDefinitionImage": "#{transcode_build.IMAGE_NAME}"
+                    "TranscodeEcsTaskDefinitionImage": "#{transcode_build.IMAGE_NAME}",
+                    "EnvironmentType": "Production",
+                    "EnvironmentTypeAbbreviation": "prod",
+                    "TranscodeJobNamePrefix": "porter-prod-"
                   }
                 RoleArn: !GetAtt CloudFormationRole.Arn
                 StackName: !Ref ProductionStackName
-                TemplateConfiguration: TemplateConfigZipArtifact::production.json
                 TemplatePath: !Sub SamBuildArtifact::${kPackagedTemplateFileName}
               InputArtifacts:
                 - Name: SamBuildArtifact
-                - Name: TemplateConfigZipArtifact
               RunOrder: 2
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
 
   PipelineStateChangeFunction:
     Type: AWS::Serverless::Function
@@ -828,9 +841,9 @@ Resources:
           Type: EventBridgeRule
       Handler: index.handler
       InlineCode: |
-        const AWS = require('aws-sdk');
+        const { SNS } = require('@aws-sdk/client-sns');
 
-        const sns = new AWS.SNS({
+        const sns = new SNS({
           apiVersion: '2010-03-31',
           region: process.env.SLACK_MESSAGE_RELAY_TOPIC_ARN.split(':')[3]
         });
@@ -867,8 +880,7 @@ Resources:
                   icon_emoji: ':ops-codepipeline:',
                   text: msg,
                 }),
-              })
-              .promise();
+              });
           }
         };
       MemorySize: 128
@@ -878,14 +890,24 @@ Resources:
               Effect: Allow
               Resource: !Ref SlackMessageRelayTopicArn
           Version: "2012-10-17"
-      Runtime: nodejs14.x
+      Runtime: nodejs18.x
       Tags:
-        Project: Infrastructure
+        prx:meta:tagging-version: "2021-04-07"
         prx:cloudformation:stack-name: !Ref AWS::StackName
         prx:cloudformation:stack-id: !Ref AWS::StackId
+        prx:ops:environment: Production
+        prx:dev:application: DevOps
       Timeout: 3
   PipelineStateChangeFunctionLogGroup:
     Type: AWS::Logs::LogGroup
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
     Properties:
       LogGroupName: !Sub /aws/lambda/${PipelineStateChangeFunction}
       RetentionInDays: 14
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }

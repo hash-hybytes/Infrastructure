@@ -33,17 +33,13 @@ Parameters:
     Type: String
     Description: >-
       (optional) This value is required when creating fresh primary clusters.
-    MinLength: 1
-    MaxLength: 16
-    AllowedPattern: "[a-zA-Z][a-zA-Z0-9]*"
+    AllowedPattern: "^$|^[a-zA-Z][a-zA-Z0-9]{0,15}"
     ConstraintDescription: must begin with a letter and contain only alphanumeric characters.
   DbClusterMasterUserPassword:
     Type: String
     Description: >-
       (optional) This value is required when creating fresh primary clusters.
-    MinLength: 8
-    MaxLength: 41
-    AllowedPattern: "[a-zA-Z0-9]*"
+    AllowedPattern: "^$|^[a-zA-Z0-9]{8,41}"
     ConstraintDescription: must contain only alphanumeric characters.
   EnvironmentType:
     Type: String
@@ -58,11 +54,17 @@ Parameters:
     Type: AWS::EC2::Subnet::Id
   Subnet3Id:
     Type: AWS::EC2::Subnet::Id
-  InstanceSecurityGroupId:
+  ClientSecurityGroupId:
     Description: >-
-      The ID for a security group that EC2 instances which should have access
+      The ID for a security group that clients which should have access
       to the database belong to
     Type: String
+  InstanceCondition:
+    Type: String
+    AllowedValues:
+      - Normal
+      - Headless
+    Default: Normal
 
 # Mappings:
 #   EnvironmentTypeMap:
@@ -72,7 +74,8 @@ Parameters:
 #       abbreviation: prod
 
 Conditions:
-  # IsProduction: !Equals [!Ref EnvironmentType, Production]
+  IsProduction: !Equals [!Ref EnvironmentType, Production]
+  HasInstances: !Equals [!Ref InstanceCondition, "Normal"]
   HasGlobalClusterIdentifier: !Not [!Equals [!Ref GlobalClusterIdentifier, ""]]
   HasMasterUsername: !Not [!Equals [!Ref DbClusterMasterUsername, ""]]
   HasMasterUserPassword: !Not [!Equals [!Ref DbClusterMasterUserPassword, ""]]
@@ -91,7 +94,7 @@ Resources:
         - postgresql
         # - upgrade Not supported by Aurora
       Engine: aurora-postgresql
-      EngineVersion: "13.3"
+      EngineVersion: "15.4"
       GlobalClusterIdentifier: !If
         - HasGlobalClusterIdentifier
         - !Ref GlobalClusterIdentifier
@@ -106,6 +109,10 @@ Resources:
         - !Ref AWS::NoValue
       # PreferredBackupWindow
       # PreferredMaintenanceWindow
+      StorageType: !If
+        - IsProduction
+        - aurora-iopt1
+        - aurora
       Tags:
         - { Key: Name, Value: !Sub "${AWS::StackName}_shared-pg-aurora" }
         - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
@@ -119,6 +126,9 @@ Resources:
   DbInstance:
     Type: AWS::RDS::DBInstance
     DependsOn: DbSubnetGroup
+    Condition: HasInstances
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
     Properties:
       AllowMajorVersionUpgrade: false
       AutoMinorVersionUpgrade: true
@@ -175,15 +185,15 @@ Resources:
         - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
         - { Key: prx:dev:application, Value: Common }
       VpcId: !Ref SharedVpcId
-  DbClusterInstanceIngressIngress:
+  DbClusterClientIngress:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
       Description: >-
-        Allows ingress traffic from the shared ALB ASG instance security group
+        Allows ingress traffic from the client security group
       FromPort: 3306
       GroupId: !GetAtt DbClusterSecurityGroup.GroupId
       IpProtocol: tcp
-      SourceSecurityGroupId: !Ref InstanceSecurityGroupId
+      SourceSecurityGroupId: !Ref ClientSecurityGroupId
       ToPort: 3306
 
 Outputs:

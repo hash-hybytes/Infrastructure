@@ -36,14 +36,24 @@ Resources:
       RecordSets:
         - Name: !Ref Domain
           ResourceRecords:
+            # SPF
+            - '"v=spf1 include:spf.protection.outlook.com include:_spf.createsend.com include:_spf.google.com include:mail.zendesk.com -all"'
+            # Domain verification
             - '"google-site-verification=AmP3tjFXQJg12mB6BkeWWipzwEOl1ZYlyjVSxTmzKbw"'
             - '"google-site-verification=muTtOe9lHpw4cK1h206kClidRJPqLVgJdKIwOkGTeZo"'
-            - '"v=spf1 include:_spf.createsend.com include:_spf.google.com include:mail.zendesk.com -all"'
+            - '"google-site-verification=_IB_vOu2XghTIYg_z50bsa94KgNh0TSZeqI2CVlmcfs"'
+            - '"MS=ms74694743"'
           TTL: "300"
           Type: TXT
         - Name: !Sub _now.${Domain}
           ResourceRecords:
             - '"6rwhcyQMNc"'
+          TTL: "3600"
+          Type: TXT
+        - Name: !Sub o365.${Domain}
+          ResourceRecords:
+            - '"MS=ms31071817"'
+            - '"v=spf1 include:spf.protection.outlook.com -all"'
           TTL: "3600"
           Type: TXT
 
@@ -53,7 +63,14 @@ Resources:
       Comment: Email, DMARC, etc
       HostedZoneId: !Ref HostedZone
       RecordSets:
+        # New 365 Mail exchange
         - Name: !Ref Domain
+          ResourceRecords:
+            - 0 theworld-org.mail.protection.outlook.com.
+          TTL: "3600"
+          Type: MX
+        # Gsuite Side of Mail Migration
+        - Name: !Sub gsuite.${Domain}
           ResourceRecords:
             - 1 ASPMX.L.GOOGLE.COM.
             - 5 ALT1.ASPMX.L.GOOGLE.COM.
@@ -62,6 +79,19 @@ Resources:
             - 10 ASPMX3.GOOGLEMAIL.COM.
           TTL: "3600"
           Type: MX
+        # O365 Side of Mail Migration
+        - Name: !Sub o365.${Domain}
+          ResourceRecords:
+            - 10 o365-theworld-org.mail.protection.outlook.com.
+          TTL: "3600"
+          Type: MX
+        # DMARC
+        - Name: !Sub _dmarc.${Domain}
+          ResourceRecords:
+            - '"v=DMARC1; p=reject; pct=100; rua=mailto:dmarc-reports@prx.org,mailto:dmarc@qf66rrn4.uriports.com; ruf=mailto:dmarc-reports@prx.org,mailto:dmarc@qf66rrn4.uriports.com"'
+          TTL: "3600"
+          Type: TXT
+        # SPF domain alignment for Campaign Monitor
         - Name: !Sub bounce.${Domain}
           ResourceRecords:
             - 5 mx20.inbound.createsend.com.
@@ -73,6 +103,7 @@ Resources:
             - '"v=spf1 include:_spf.createsend.com -all"'
           TTL: "3600"
           Type: TXT
+        # SPF domain alignment for Amazon SES
         - Name: !Sub bounces.${Domain}
           ResourceRecords:
             - 10 feedback-smtp.us-east-2.amazonses.com.
@@ -80,14 +111,10 @@ Resources:
           Type: MX
         - Name: !Sub bounces.${Domain}
           ResourceRecords:
-            - '"v=spf1 include:amazonses.com ~all"'
+            - '"v=spf1 include:amazonses.com -all"'
           TTL: "3600"
           Type: TXT
-        - Name: !Sub _dmarc.${Domain}
-          ResourceRecords:
-            - '"v=DMARC1; p=none; pct=100; rua=mailto:dmarc-reports@prx.org; ruf=mailto:dmarc-reports@prx.org"'
-          TTL: "3600"
-          Type: TXT
+        # Google Workspace DKIM
         - Name: !Sub tw._domainkey.${Domain}
           ResourceRecords:
             - '"v=DKIM1;" "k=rsa;" "p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC0G0xkC9q99G/ckuWkxyHwZ3NKyvmqRYjfvO0GdEoQHg1Vmzgziuf5gEJJDeJlSB7YcmUfi3XG18mI4L4m5p3WlUCKCMQ04V+o3Cc4Rxg4JVqkd8qEQ31kEZV8GXhStbPCEhDPU1hlrOV3aS03fLE5mXMBrfnxYj8PMH70GRJgVQIDAQAB"'
@@ -129,6 +156,11 @@ Resources:
         - Name: !Sub search.${Domain}
           ResourceRecords:
             - search.theworld.prx.tech.
+          TTL: "3600"
+          Type: CNAME
+        - Name: !Sub search.staging.${Domain}
+          ResourceRecords:
+            - search.staging.theworld.prx.tech.
           TTL: "3600"
           Type: CNAME
 
@@ -228,7 +260,7 @@ Resources:
         # Iframely
         - Name: !Sub embed.${Domain}
           ResourceRecords:
-            - iframely.dualstack.infrast-alb-glmluhy47jtg-1091895049.us-east-1.elb.amazonaws.com.prod.prx.tech.
+            - infrast-Alb-GLMLUHY47JTG-1091895049.us-east-1.elb.amazonaws.com.
           TTL: "3600"
           Type: CNAME
 
@@ -249,6 +281,33 @@ Resources:
           TTL: "3600"
           Type: AAAA
           Name: !Sub embedded.${Domain}
+
+  Office365:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      Comment: Website
+      HostedZoneId: !Ref HostedZone
+      RecordSets:
+        - Name: !Sub autodiscover.o365.${Domain}
+          ResourceRecords:
+            - autodiscover.outlook.com.
+          TTL: "3600"
+          Type: CNAME
+        - Name: !Sub autodiscover.${Domain}
+          ResourceRecords:
+            - autodiscover.outlook.com.
+          TTL: "3600"
+          Type: CNAME
+        - Name: !Sub selector1._domainkey.${Domain}
+          ResourceRecords:
+            - selector1-theworld-org._domainkey.WGBH365.onmicrosoft.com.
+          TTL: "3600"
+          Type: CNAME
+        - Name: !Sub selector2._domainkey.${Domain}
+          ResourceRecords:
+            - selector2-theworld-org._domainkey.WGBH365.onmicrosoft.com.
+          TTL: "3600"
+          Type: CNAME
 
   ZenDesk:
     Type: AWS::Route53::RecordSetGroup
@@ -303,7 +362,7 @@ Resources:
         # DKIM
         - Name: !Sub cm._domainkey.${Domain}
           ResourceRecords:
-            - '"k=rsa;" "p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDDKR0wcyrPwiQgq5AIQlsKXr7tISyJ+krcI+2gtz4VuaPgtDKLI7V95MAzoMyBNebG+Gi80Pk6Of8+RbVPHawK6x5xcKi+93X08m/SkT2uSKx6TT7WCn9AqhGYpkoveZdDhcjBbS3vxjQo8ZDmkB7UuzSCBFda6HRBNkudi1393wIDAQAB"'
+            - '"v=DKIM1; k=rsa;" "p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDDKR0wcyrPwiQgq5AIQlsKXr7tISyJ+krcI+2gtz4VuaPgtDKLI7V95MAzoMyBNebG+Gi80Pk6Of8+RbVPHawK6x5xcKi+93X08m/SkT2uSKx6TT7WCn9AqhGYpkoveZdDhcjBbS3vxjQo8ZDmkB7UuzSCBFda6HRBNkudi1393wIDAQAB"'
           TTL: "3600"
           Type: TXT
         # Custom backend domain
@@ -341,6 +400,12 @@ Resources:
         - Name: !Sub _473485159b575ac9a329c2c6c9713570.search.${Domain}
           ResourceRecords:
             - _70056b05dc4fc317d096b16a68ee18bf.czrmfnbpdk.acm-validations.aws.
+          TTL: "3600"
+          Type: CNAME
+        #  search.staging.theworld.org
+        - Name: !Sub _df1dc0e03f30b4a2e7db90e278f598ac.search.staging.${Domain}
+          ResourceRecords:
+            - _59e41e3645125f53b21b2df2bfbd73b1.yqdvztwmqr.acm-validations.aws.
           TTL: "3600"
           Type: CNAME
 

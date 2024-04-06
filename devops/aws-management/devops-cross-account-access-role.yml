@@ -7,7 +7,8 @@ Description: >-
   centrally. By default and convention, the role's name is:
   DevOps-CrossAccountAccessRole. This template is intended to be launched as
   part of a service-managed StackSet that automatically deploys to all accounts
-  within an organization.
+  within an organization. Only needs to be launched once per account, since
+  roles are global within an account.
 
 Parameters:
   OrganizationId:
@@ -22,26 +23,29 @@ Parameters:
       "DevOps-CrossAccountAccessRole", and generally that should be used so
       that it's predictable by other users and services.
 
+# Creates a role with a known name, which will exist in all accounts within
+# the AWS Organization. This role can also be assumed by any other role within
+# the organization.
+#
+# Since we know the role will exist and can be assumed, we can use this role to
+# perform some common tasks against all accounts within the organization,
+# regardless of where those tasks are being performed or which IAM role is
+# otherwise being used to perform them. (I.e., a Lambda function in any account,
+# with any execution role, can assume this role and perform one of the allowed
+# IAM actions.)
+#
+# IMPORTANT !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+#
+# The permissions given to this role through the actions and resources listed
+# in the following IAM policies should only include EXTREMELY safe permissions.
+# This role should never be used for CRUD operations of actual resources. It is
+# intended for things like read-only Get and List operations on some resource
+# types, or very safe maintenance tasks, like creating a CloudFront
+# invalidation.
+#
+# New permissions should be added to this role very deliberately andjudiciously.
 Resources:
-  CloudFrontListDistributionsPolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      PolicyDocument:
-        Statement:
-          - Action: cloudfront:ListDistributions
-            Effect: Allow
-            Resource: "*"
-        Version: "2012-10-17"
-  CloudFrontCreateInvalidationPolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      PolicyDocument:
-        Statement:
-          - Action: cloudfront:CreateInvalidation
-            Effect: Allow
-            Resource: "*"
-        Version: "2012-10-17"
-  CodePipelineListPipelinesPolicy:
+  CodePipelinePolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
       PolicyDocument:
@@ -49,47 +53,44 @@ Resources:
           - Action: codepipeline:ListPipelines
             Effect: Allow
             Resource: "*"
-        Version: "2012-10-17"
-  CodePipelineStartPipelineExecutionPolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      PolicyDocument:
-        Statement:
+            Sid: AllowListPipelines
           - Action: codepipeline:StartPipelineExecution
             Effect: Allow
             Resource: "*"
-        Version: "2012-10-17"
-  CodePipelineStartPipelineApprovalResultPolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      PolicyDocument:
-        Statement:
+            Sid: AllowStartExecution
           - Action: codepipeline:PutApprovalResult
             Effect: Allow
             Resource: "*"
-        Version: "2012-10-17"
-  CodePipelineTransitionChangePolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      PolicyDocument:
-        Statement:
+            Sid: AllowApprovalAction
           - Action:
               - codepipeline:DisableStageTransition
               - codepipeline:EnableStageTransition
             Effect: Allow
             Resource: "*"
-        Version: "2012-10-17"
-  CodePipelineReadPolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      PolicyDocument:
-        Statement:
+            Sid: AllowStageTransitionToggle
           - Action:
               - codepipeline:GetPipeline
               - codepipeline:GetPipelineState
             Effect: Allow
             Resource: "*"
+            Sid: AllowReadOnlyAccess
         Version: "2012-10-17"
+
+  CloudFrontPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: cloudfront:ListDistributions
+            Effect: Allow
+            Resource: "*"
+            Sid: AllowListDistributions
+          - Action: cloudfront:CreateInvalidation
+            Effect: Allow
+            Resource: "*"
+            Sid: AllowInvalidations
+        Version: "2012-10-17"
+
   S3ListVersionsPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
@@ -117,6 +118,19 @@ Resources:
             Resource: arn:aws:s3:::*/template-config-staging.zip
         Version: "2012-10-17"
 
+  IamPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - iam:Get*
+              - iam:List*
+            Effect: Allow
+            Resource: "*"
+            Sid: AllowReadOnlyAccess
+        Version: "2012-10-17"
+
   CrossAccountAccessRole:
     Type: AWS::IAM::Role
     Properties:
@@ -134,23 +148,18 @@ Resources:
               AWS: "*"
       # Include all the policies defined above
       ManagedPolicyArns:
-        - !Ref CloudFrontListDistributionsPolicy
-        - !Ref CloudFrontCreateInvalidationPolicy
-        - !Ref CodePipelineListPipelinesPolicy
-        - !Ref CodePipelineStartPipelineExecutionPolicy
-        - !Ref CodePipelineStartPipelineApprovalResultPolicy
-        - !Ref CodePipelineTransitionChangePolicy
-        - !Ref CodePipelineReadPolicy
+        - !Ref CloudFrontPolicy
+        - !Ref CodePipelinePolicy
+        - !Ref IamPolicy
         - !Ref S3ListVersionsPolicy
         - !Ref S3TemplateConfigCopyPolicy
       RoleName: !Sub ${CrossAccountAccessRoleName}
       Tags:
-        - Key: Project
-          Value: Infrastructure
-        - Key: prx:cloudformation:stack-name
-          Value: !Ref AWS::StackName
-        - Key: prx:cloudformation:stack-id
-          Value: !Ref AWS::StackId
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
 
 Outputs:
   RoleNamePattern:

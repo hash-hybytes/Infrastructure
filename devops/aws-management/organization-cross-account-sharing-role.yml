@@ -11,6 +11,10 @@ Parameters:
     Type: String
 
 Resources:
+  # The main purpose of this role is to allow management tooling to fetch basic
+  # information about the AWS Organization it exists within, such as getting a
+  # list of all accounts within the organization. It has limited utility
+  # otherwise, and should not be granted any additional permissions.
   CrossAccountSharingRole:
     Type: AWS::IAM::Role
     Properties:
@@ -38,12 +42,11 @@ Resources:
           PolicyName: OrganizationReadOnlyAccess
       RoleName: PRX-Oganization-CrossAccountSharingRole
       Tags:
-        - Key: Project
-          Value: Infrastructure
-        - Key: "prx:cloudformation:stack-name"
-          Value: !Ref AWS::StackName
-        - Key: "prx:cloudformation:stack-id"
-          Value: !Ref AWS::StackId
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: Production }
+        - { Key: prx:dev:application, Value: DevOps }
 
 Outputs:
   RoleName:

@@ -2,34 +2,63 @@
   "name": "infrastructure",
   "version": "1.0.0",
   "license": "AGPL-3.0",
+  "private": "true",
+  "engines": {
+    "node": ">= 20.0.0"
+  },
   "repository": {
     "type": "git",
     "url": "git://github.com/PRX/Infrastructure.git"
   },
   "dependencies": {
-    "aws-sdk": "^2.663.0",
-    "aws-xray-sdk": "^3.0.0"
+    "@aws-sdk/client-cloudformation": "3.x",
+    "@aws-sdk/client-cloudfront": "3.x",
+    "@aws-sdk/client-cloudwatch": "3.x",
+    "@aws-sdk/client-codebuild": "3.x",
+    "@aws-sdk/client-codepipeline": "3.x",
+    "@aws-sdk/client-ec2": "3.x",
+    "@aws-sdk/client-ecs": "3.x",
+    "@aws-sdk/client-eventbridge": "3.x",
+    "@aws-sdk/client-kinesis": "3.x",
+    "@aws-sdk/client-organizations": "3.x",
+    "@aws-sdk/client-s3": "3.x",
+    "@aws-sdk/client-sns": "3.x",
+    "@aws-sdk/client-ssm": "3.x",
+    "@aws-sdk/client-transfer": "3.x",
+    "@aws-sdk/middleware-retry": "3.x",
+    "@aws-sdk/util-retry": "3.x",
+    "adm-zip": "^0.5.9",
+    "aws-sdk": "^2.x",
+    "octokit": "*",
+    "aws-xray-sdk": "*"
   },
   "devDependencies": {
-    "@octokit/rest": "^18.2.0",
-    "@slack/web-api": "^5.14.0",
-    "@types/aws-lambda": "^8.10.63",
-    "aws-sdk-mock": "^5.1.0",
-    "dotenv": "^8.2.0",
-    "eslint": "^7.20.0",
-    "eslint-config-airbnb-base": "^14.1.0",
-    "eslint-config-prettier": "^7.2.0",
-    "eslint-plugin-import": "^2.20.2",
-    "eslint-plugin-jest": "^24.1.0",
-    "eslint-plugin-prettier": "^3.3.1",
-    "jest": "^26.0.1",
-    "prettier": "^2.2.1",
-    "typescript": "^4.0",
-    "yaml-cfn": "^0.2.3"
+    "@prettier/plugin-ruby": "*",
+    "@slack/events-api": "^3",
+    "@slack/interactive-messages": "^2",
+    "@slack/web-api": "*",
+    "@types/aws-lambda": "*",
+    "aws-sdk-mock": "*",
+    "basic-ftp": "*",
+    "dotenv": "*",
+    "eslint": "*",
+    "eslint-config-airbnb-base": "*",
+    "eslint-config-prettier": "*",
+    "eslint-plugin-import": "*",
+    "eslint-plugin-jest": "*",
+    "eslint-plugin-prettier": "*",
+    "jest": "*",
+    "prettier": "*",
+    "typescript": "*",
+    "yaml-cfn": "*"
   },
   "scripts": {
     "eslint": "eslint",
     "prettier": "prettier",
-    "tsc": "tsc"
+    "tsc": "tsc",
+    "black": "python -m black --check ./",
+    "flake8": "python -m flake8",
+    "cfn-lint": "find . -name \"*.yml\" -type f ! -path \"*/node_modules/*\" ! -path \"./.github/*\" -mindepth 2 -print0 | xargs -0 -n1 cfn-lint --ignore-checks E3008 --template",
+    "test": "npm run cfn-lint && tsc && eslint '**/*.js' && prettier --check '**/*.{js,json,yml}' && npm run black && npm run flake8"
   }
 }

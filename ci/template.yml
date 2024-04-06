@@ -1,14 +1,13 @@
 # ci/template.yml
-# This stack should generally only be launched once globally
+# This template is deployed continuously via GitHub Actions.
+#
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
+
 Description: >-
   Creates a continuous integration system to handle testing, building, and
   pushing assets in response to changes on GitHub
-Mappings:
-  Shared:
-    SourceArchives:
-      Key: github-source-archive.zip
+
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -16,12 +15,6 @@ Metadata:
           default: Stack Dependencies
         Parameters:
           - InfrastructureStorageStackName
-          - InfrastructureNotificationsStackName
-          - InfrastructureSecretsStackName
-      - Label:
-          default: Template Configuration
-        Parameters:
-          - InfrastructureConfigStagingKey
       - Label:
           default: GitHub API
         Parameters:
@@ -30,34 +23,15 @@ Metadata:
     ParameterLabels:
       InfrastructureStorageStackName:
         default: Storage stack name
-      InfrastructureNotificationsStackName:
-        default: Notifications stack name
-      InfrastructureSecretsStackName:
-        default: Secrets stack name
-      InfrastructureConfigStagingKey:
-        default: Staging S3 object key
       GitHubToken:
         default: Access token
       GitHubWebhookSecret:
         default: Webhook secret
+
 Parameters:
   InfrastructureStorageStackName:
     Default: infrastructure-storage
     Description: The name of a previously launched infrastructure storage stack
-    Type: String
-  InfrastructureNotificationsStackName:
-    Default: infrastructure-notifications
-    Description: The name of a previously launched notifications stack
-    Type: String
-  InfrastructureSecretsStackName:
-    Default: infrastructure-secrets
-    Description: The name of a previously launched infrastructure secrets stack
-    Type: String
-  InfrastructureConfigStagingKey:
-    Default: template-config-staging.zip
-    Description: >-
-      The S3 object key for the staging template configuration file archive
-      (.zip), inside the InfrastructureConfigBucket
     Type: String
   GitHubToken:
     Description: >-
@@ -68,24 +42,11 @@ Parameters:
     Description: >-
       The secret provided by GitHub for the push and pull request events webhook
     Type: String
+  SlackMessageRelaySnsTopicArn:
+    Type: String
+
 Resources:
   # CodeBuild Project
-  CiCodeBuildSourceArchiveBucket:
-    # TODO Remove, no longer used
-    # The CI CodeBuild project has read access to this bucket, so code and
-    # assets needed for builds can be placed in it
-    Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      Tags:
-        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
-        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
-        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
-        - { Key: prx:ops:environment, Value: Production }
-        - { Key: prx:dev:application, Value: CI }
-      VersioningConfiguration:
-        Status: Enabled
   CiCodeBuildIamRole:
     Type: AWS::IAM::Role
     Properties:
@@ -97,15 +58,6 @@ Resources:
               Service: codebuild.amazonaws.com
         Version: "2012-10-17"
       Policies:
-        - PolicyName: CiCodeBuildSourceArchiveBucketBasicAccess
-          PolicyDocument:
-            Statement:
-              - Action:
-                  - s3:GetObject
-                  - s3:GetObjectVersion
-                Effect: Allow
-                Resource: !Sub arn:aws:s3:::${CiCodeBuildSourceArchiveBucket}/*
-            Version: "2012-10-17"
         - PolicyName: ApplicationCodeWriteAccess
           PolicyDocument:
             Statement:
@@ -120,21 +72,13 @@ Resources:
                 Effect: Allow
                 Resource: "*" # TODO
             Version: "2012-10-17"
-        # - PolicyName: SnsPolicy
-        #   PolicyDocument:
-        #     Statement:
-        #       - Action: sns:Publish
-        #         Effect: Allow
-        #         Resource:
-        #           - !Ref CiStatusSnsTopic
-        #           - !Ref CodeBuildCallbackSnsTopic
-        #     Version: "2012-10-17"
         - PolicyName: ECRAccess
           PolicyDocument:
             Statement:
               - Action:
-                  - ecr:GetAuthorizationToken
                   - ecr:CreateRepository
+                  - ecr:DescribeRepositories
+                  - ecr:GetAuthorizationToken
                 Effect: Allow
                 Resource: "*"
               - Effect: Allow
@@ -146,20 +90,17 @@ Resources:
                   - ecr:CompleteLayerUpload
                   - ecr:UploadLayerPart
                   - ecr:PutImage
-                Resource: !Sub arn:aws:ecr:us-east-1:${AWS::AccountId}:repository/*
+                Resource: !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/*
             Version: "2012-10-17"
         - PolicyName: PorterPolicy
           PolicyDocument:
             Statement:
               - Action:
-                  - "states:StartExecution"
-                  - "states:DescribeExecution"
+                  - states:StartExecution
+                  - states:DescribeExecution
                 Effect: Allow
                 Resource: "*" # TODO
             Version: "2012-10-17"
-      ManagedPolicyArns:
-        - Fn::ImportValue: !Sub ${InfrastructureSecretsStackName}-SecretsInstanceAccessPolicyArn
-        - Fn::ImportValue: !Sub ${InfrastructureSecretsStackName}-SecretsInstanceDecryptPolicyArn
       Tags:
         - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
         - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
@@ -178,17 +119,11 @@ Resources:
               - logs:PutLogEvents
             Effect: Allow
             Resource:
-              - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${CiCodeBuildProject}
-              - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${CiCodeBuildProject}:*
+              - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${CiCodeBuildProject}
+              - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${CiCodeBuildProject}:*
       PolicyName: !Sub ${AWS::StackName}-CiCodeBuildLogsIamPolicy
       Roles:
         - !Ref CiCodeBuildIamRole
-  CiCodeBuildSourceCredential:
-    Type: AWS::CodeBuild::SourceCredential
-    Properties:
-      AuthType: PERSONAL_ACCESS_TOKEN
-      ServerType: GITHUB
-      Token: !Ref GitHubToken
   CiCodeBuildProject:
     Type: AWS::CodeBuild::Project
     Properties:
@@ -205,15 +140,12 @@ Resources:
           - Name: PRX_APPLICATION_CODE_BUCKET
             Value:
               Fn::ImportValue: !Sub ${InfrastructureStorageStackName}-InfrastructureApplicationCodeBucket
-        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
         PrivilegedMode: true
         Type: LINUX_CONTAINER
       Name: !Sub ${AWS::StackName}-Runner2
       ServiceRole: !GetAtt CiCodeBuildIamRole.Arn
       Source:
-        Auth:
-          Resource: !Ref CiCodeBuildSourceCredential
-          Type: OAUTH
         GitCloneDepth: 1
         Location: https://github.com/PRX/Infrastructure.git
         ReportBuildStatus: true
@@ -226,15 +158,6 @@ Resources:
         - { Key: prx:dev:application, Value: CI }
       TimeoutInMinutes: 16
 
-  HttpApi:
-    Type: AWS::Serverless::HttpApi
-    Properties:
-      Tags:
-        prx:meta:tagging-version: "2021-04-07"
-        prx:cloudformation:stack-name: !Ref AWS::StackName
-        prx:cloudformation:stack-id: !Ref AWS::StackId
-        prx:ops:environment: Production
-        prx:dev:application: CI
   GitHubWebhookEndpointFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -245,13 +168,9 @@ Resources:
       Environment:
         Variables:
           GITHUB_WEBHOOK_SECRET: !Ref GitHubWebhookSecret
-      Events:
-        GitHubWebhookRequest:
-          Properties:
-            ApiId: !Ref HttpApi
-            Method: post
-            Path: /v1/github/webhook
-          Type: HttpApi
+      FunctionUrlConfig:
+        AuthType: NONE
+        InvokeMode: BUFFERED
       Handler: index.handler
       MemorySize: 128
       Policies:
@@ -260,7 +179,7 @@ Resources:
               Effect: Allow
               Resource: "*"
           Version: "2012-10-17"
-      Runtime: nodejs14.x
+      Runtime: nodejs20.x
       Tags:
         prx:meta:tagging-version: "2021-04-07"
         prx:cloudformation:stack-name: !Ref AWS::StackName
@@ -270,6 +189,8 @@ Resources:
       Timeout: 3
   GitHubWebhookEndpointLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       LogGroupName: !Sub /aws/lambda/${GitHubWebhookEndpointFunction}
       RetentionInDays: 5
@@ -311,8 +232,6 @@ Resources:
         Variables:
           GITHUB_ACCESS_TOKEN: !Ref GitHubToken
           CODEBUILD_PROJECT_NAME: !Ref CiCodeBuildProject
-          CODEBUILD_SOURCE_ARCHIVE_BUCKET: !Ref CiCodeBuildSourceArchiveBucket
-          CODEBUILD_SOURCE_ARCHIVE_KEY: !FindInMap [Shared, SourceArchives, Key]
           AWS_ACCOUNT_ID: !Ref AWS::AccountId
       Events:
         GitHubWebhook:
@@ -325,16 +244,11 @@ Resources:
       MemorySize: 256
       Policies:
         - Statement:
-            - Action: s3:PutObject
-              Effect: Allow
-              Resource: !Sub ${CiCodeBuildSourceArchiveBucket.Arn}/*
-          Version: "2012-10-17"
-        - Statement:
             - Action: codebuild:StartBuild
               Effect: Allow
               Resource: !GetAtt CiCodeBuildProject.Arn
           Version: "2012-10-17"
-      Runtime: nodejs14.x
+      Runtime: nodejs20.x
       Tags:
         prx:meta:tagging-version: "2021-04-07"
         prx:cloudformation:stack-name: !Ref AWS::StackName
@@ -344,6 +258,8 @@ Resources:
       Timeout: 30
   BuildHandlerLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       LogGroupName: !Sub /aws/lambda/${BuildHandlerFunction}
       RetentionInDays: 5
@@ -372,19 +288,17 @@ Resources:
       Threshold: 0
       TreatMissingData: notBreaching
 
-  StagingConfigHandlerFunction:
+  ParameterStoreUpdaterFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: src/staging-config-handler/
+      CodeUri: src/parameter-store-updater/
       Description: >-
         Listens for successful CI CodeBuild builds on EventBridge, and updates
-        the staging stack template config JSON file in S3 with new code package
-        identifiers when necessary.
+        Parameter Store parameters with new code package identifiers when
+        necessary.
       Environment:
         Variables:
-          INFRASTRUCTURE_CONFIG_BUCKET:
-            Fn::ImportValue: !Sub ${InfrastructureStorageStackName}-InfrastructureConfigBucket
-          INFRASTRUCTURE_CONFIG_STAGING_KEY: !Ref InfrastructureConfigStagingKey
+          SLACK_MESSAGE_RELAY_TOPIC_ARN: !Ref SlackMessageRelaySnsTopicArn
       Events:
         CodeBuild:
           Properties:
@@ -399,17 +313,20 @@ Resources:
               source:
                 - aws.codebuild
           Type: EventBridgeRule
-      Handler: lambda_function.lambda_handler
+      Handler: index.handler
       MemorySize: 192
       Policies:
         - Statement:
-            - Action:
-                - s3:GetObject
-                - s3:PutObject
+            - Action: sns:Publish
               Effect: Allow
-              Resource: !Join ["", ["arn:aws:s3:::", "Fn::ImportValue": !Sub "${InfrastructureStorageStackName}-InfrastructureConfigBucket", "/", !Ref InfrastructureConfigStagingKey]]
+              Resource: !Ref SlackMessageRelaySnsTopicArn
           Version: "2012-10-17"
-      Runtime: python3.9
+        - Statement:
+            - Action: ssm:PutParameter
+              Effect: Allow
+              Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/prx/stag/Spire/*
+          Version: "2012-10-17"
+      Runtime: nodejs20.x
       Tags:
         prx:meta:tagging-version: "2021-04-07"
         prx:cloudformation:stack-name: !Ref AWS::StackName
@@ -417,10 +334,12 @@ Resources:
         prx:ops:environment: Production
         prx:dev:application: CI
       Timeout: 10
-  StagingConfigHandlerLogGroup:
+  ParameterStoreUpdaterLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub /aws/lambda/${StagingConfigHandlerFunction}
+      LogGroupName: !Sub /aws/lambda/${ParameterStoreUpdaterFunction}
       RetentionInDays: 5
       Tags:
         - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
@@ -428,19 +347,18 @@ Resources:
         - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
         - { Key: prx:ops:environment, Value: Production }
         - { Key: prx:dev:application, Value: CI }
-  StagingConfigHandlerErrorAlarm:
+  ParameterStoreUpdaterErrorAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub WARN [CI] Staging config <prod> FUNCTION ERRORS (${AWS::StackName})
+      AlarmName: !Sub WARN [CI] Parameter store updater <prod> FUNCTION ERRORS (${AWS::StackName})
       AlarmDescription: >-
-        The Lambda function that updates the CloudFormation template config
-        file for the staging root stack based on CI build artifacts is
-        failing, so some new app versions may not be deployed via CD as
-        expected.
+        The Lambda function that updates parameter store values for the staging
+        root stack based on CI build artifacts is failing, so some new app
+        versions may not be deployed via CD as expected.
       ComparisonOperator: GreaterThanThreshold
       Dimensions:
         - Name: FunctionName
-          Value: !Ref StagingConfigHandlerFunction
+          Value: !Ref ParameterStoreUpdaterFunction
       EvaluationPeriods: 1
       MetricName: Errors
       Namespace: AWS/Lambda
@@ -448,69 +366,6 @@ Resources:
       Statistic: Sum
       Threshold: 0
       TreatMissingData: notBreaching
-
-  # GitHubStatusHandlerFunction:
-  #   Type: AWS::Serverless::Function
-  #   Properties:
-  #     CodeUri: src/github-status-handler/
-  #     Description: >-
-  #       Listens for CI CodeBuild state changes on EventBridge and updates
-  #       GitHub repository statuses as necessary.
-  #     Environment:
-  #       Variables:
-  #         GITHUB_ACCESS_TOKEN: !Ref GitHubToken
-  #     Events:
-  #       CodeBuild:
-  #         Properties:
-  #           Pattern:
-  #             detail:
-  #               project-name:
-  #                 - !Ref CiCodeBuildProject
-  #             detail-type:
-  #               - CodeBuild Build State Change
-  #             source:
-  #               - aws.codebuild
-  #         Type: EventBridgeRule
-  #     Handler: index.handler
-  #     MemorySize: 128
-  #     Runtime: nodejs14.x
-  #     Tags:
-  #       prx:meta:tagging-version: "2021-04-07"
-  #       prx:cloudformation:stack-name: !Ref AWS::StackName
-  #       prx:cloudformation:stack-id: !Ref AWS::StackId
-  #       prx:ops:environment: Production
-  #       prx:dev:application: CI
-  #     Timeout: 10
-  # GitHubStatusHandlerLogGroup:
-  #   Type: AWS::Logs::LogGroup
-  #   Properties:
-  #     LogGroupName: !Sub /aws/lambda/${GitHubStatusHandlerFunction}
-  #     RetentionInDays: 5
-  #     Tags:
-  #       - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
-  #       - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
-  #       - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
-  #       - { Key: prx:ops:environment, Value: Production }
-  #       - { Key: prx:dev:application, Value: CI }
-  # GitHubStatusHandlerErrorAlarm:
-  #   Type: AWS::CloudWatch::Alarm
-  #   Properties:
-  #     AlarmName: !Sub WARN [CI] GitHub status <prod> FUNCTION ERRORS (${AWS::StackName})
-  #     AlarmDescription: >-
-  #       The Lambda function that updates GitHub statuses based on CI build
-  #       events is failing, so some commits or branches may show inaccurate
-  #       information.
-  #     ComparisonOperator: GreaterThanThreshold
-  #     Dimensions:
-  #       - Name: FunctionName
-  #         Value: !Ref GitHubStatusHandlerFunction
-  #     EvaluationPeriods: 1
-  #     MetricName: Errors
-  #     Namespace: AWS/Lambda
-  #     Period: 60
-  #     Statistic: Sum
-  #     Threshold: 0
-  #     TreatMissingData: notBreaching
 
   SlackMessageHandlerFunction:
     Type: AWS::Serverless::Function
@@ -522,8 +377,7 @@ Resources:
       Environment:
         Variables:
           GITHUB_ACCESS_TOKEN: !Ref GitHubToken
-          SLACK_MESSAGE_RELAY_TOPIC_ARN:
-            Fn::ImportValue: !Sub ${InfrastructureNotificationsStackName}-SlackMessageRelaySnsTopicArn
+          SLACK_MESSAGE_RELAY_TOPIC_ARN: !Ref SlackMessageRelaySnsTopicArn
       Events:
         CodeBuild:
           Properties:
@@ -542,10 +396,9 @@ Resources:
         - Statement:
             - Action: sns:Publish
               Effect: Allow
-              Resource:
-                Fn::ImportValue: !Sub ${InfrastructureNotificationsStackName}-SlackMessageRelaySnsTopicArn
+              Resource: !Ref SlackMessageRelaySnsTopicArn
           Version: "2012-10-17"
-      Runtime: nodejs14.x
+      Runtime: nodejs20.x
       Tags:
         prx:meta:tagging-version: "2021-04-07"
         prx:cloudformation:stack-name: !Ref AWS::StackName
@@ -555,6 +408,8 @@ Resources:
       Timeout: 10
   SlackMessageHandlerLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       LogGroupName: !Sub /aws/lambda/${SlackMessageHandlerFunction}
       RetentionInDays: 5
@@ -582,6 +437,7 @@ Resources:
       Statistic: Sum
       Threshold: 0
       TreatMissingData: notBreaching
+
 Outputs:
   GitHubWebhookEndpointUrl:
-    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com
+    Value: !GetAtt GitHubWebhookEndpointFunctionUrl.FunctionUrl

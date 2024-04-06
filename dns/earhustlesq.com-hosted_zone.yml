@@ -1,4 +1,9 @@
 # dns/radiotopia.com-hosted_zone.yml
+################################################################################
+#### !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! ########################################
+#### THIS FILE IS CONTINUOUSLY DEPLOYED ########################################
+#### !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! ########################################
+################################################################################
 AWSTemplateFormatVersion: "2010-09-09"
 Description: Hosted zone and record sets for earhustlesq.com
 
@@ -22,6 +27,7 @@ Resources:
         - { Key: prx:dev:application, Value: Ear Hustle }
       Name: !Ref Domain
 
+  # Purpose-based
   Text:
     Type: AWS::Route53::RecordSetGroup
     Properties:
@@ -35,12 +41,16 @@ Resources:
       RecordSets:
         - Name: !Ref Domain
           ResourceRecords:
+            # SPF
+            - '"v=spf1 include:_spf.createsend.com include:_spf.google.com include:mail.zendesk.com -all"'
+            # Domain verification
             - '"google-site-verification=qBcbUuEZX8GBf_AFigI3GUqiA6s4qAHygubo0-XC7wA"'
-            - '"v=spf1 include:_spf.google.com include:mail.zendesk.com ~all"'
+            - '"google-site-verification=Ut7HDW58oiZ-w8ck-3_NcqA1YrRLmhcWku7-Luk35ho"'
+            - '"google-site-verification=OUp-pUR9WypF3Sl_4q857RIQ9fMZ5I0IzK8b2ACUAKU"'
+            - '"ZOOM_verify_M8WGIgFKtF9FpUsIVst6jr"'
           TTL: "300"
           Type: TXT
-
-  GSuite:
+  Email:
     Type: AWS::Route53::RecordSetGroup
     Properties:
       Comment: G Suite
@@ -55,7 +65,21 @@ Resources:
             - 10 ASPMX3.GOOGLEMAIL.COM.
           TTL: "3600"
           Type: MX
-
+        - Name: !Sub old.${Domain}
+          ResourceRecords:
+            - 1 ASPMX.L.GOOGLE.COM.
+            - 5 ALT1.ASPMX.L.GOOGLE.COM.
+            - 5 ALT2.ASPMX.L.GOOGLE.COM.
+            - 10 ALT3.ASPMX.L.GOOGLE.COM.
+            - 10 ALT4.ASPMX.L.GOOGLE.COM.
+          TTL: "3600"
+          Type: MX
+        # DMARC
+        - Name: !Sub _dmarc.${Domain}
+          ResourceRecords:
+            - '"v=DMARC1; p=reject; pct=100; ri=86400; rua=mailto:dmarc-reports@prx.org,mailto:dmarc@qf66rrn4.uriports.com; ruf=mailto:dmarc-reports@prx.org,mailto:dmarc@qf66rrn4.uriports.com; aspf=r; adkim=r"'
+          TTL: "300"
+          Type: TXT
   Web:
     Type: AWS::Route53::RecordSetGroup
     Properties:
@@ -68,14 +92,13 @@ Resources:
             - 198.185.159.145
             - 198.49.23.144
             - 198.49.23.145
-          TTL: "300"
+          TTL: "3600"
           Type: A
         - Name: !Sub www.${Domain}
           ResourceRecords:
             - ext-cust.squarespace.com.
-          TTL: "300"
+          TTL: "3600"
           Type: CNAME
-
   Podcast:
     Type: AWS::Route53::RecordSetGroup
     Properties:
@@ -85,9 +108,10 @@ Resources:
         - Name: !Sub feeds.${Domain}
           ResourceRecords:
             - ree9fi.feedproxy.ghs.google.com.
-          TTL: "300"
+          TTL: "3600"
           Type: CNAME
 
+  # Service-specific
   Squarespace:
     Type: AWS::Route53::RecordSetGroup
     Properties:
@@ -99,7 +123,6 @@ Resources:
             - verify.squarespace.com.
           TTL: "86400"
           Type: CNAME
-
   ZenDesk:
     Type: AWS::Route53::RecordSetGroup
     Properties:
@@ -143,15 +166,60 @@ Resources:
             - zendesk2._domainkey.zendesk.com.
           TTL: "3600"
           Type: CNAME
-
   CampaignMonitor:
     Type: AWS::Route53::RecordSetGroup
     Properties:
       Comment: Campaign Monitor
       HostedZoneId: !Ref HostedZone
       RecordSets:
+        # DKIM
         - Name: !Sub cm._domainkey.${Domain}
           ResourceRecords:
-            - '"k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC5NPl7a6iXEqMnXp0zAmBuooTuZVOfI++lXBG4sEq17eZ1+p4EQlHsDE69xHqkCgrI2wH+/wsTR85H4g48FRMIsP7tci6Ld/fBpPozRYkr3Y32/MXmhaEQJ2v9AtXziVgxMjvEP/PB8Pxmc1MjZC4xeqo7cojl3snmVLntQIyTXwIDAQAB"'
+            - '"v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC5NPl7a6iXEqMnXp0zAmBuooTuZVOfI++lXBG4sEq17eZ1+p4EQlHsDE69xHqkCgrI2wH+/wsTR85H4g48FRMIsP7tci6Ld/fBpPozRYkr3Y32/MXmhaEQJ2v9AtXziVgxMjvEP/PB8Pxmc1MjZC4xeqo7cojl3snmVLntQIyTXwIDAQAB"'
           TTL: "3600"
           Type: TXT
+        # SPF domain alignment
+        - Name: !Sub cm-bounce.${Domain}
+          ResourceRecords:
+            - '"v=spf1 include:_spf.createsend.com -all"'
+          TTL: "3600"
+          Type: TXT
+        - Name: !Sub cm-bounce.${Domain}
+          ResourceRecords:
+            - 5 mx20.inbound.createsend.com
+            - 5 mx21.inbound.createsend.com
+          TTL: "3600"
+          Type: MX
+  GoogleWorkspace:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      Comment: Google Workspace
+      HostedZoneId: !Ref HostedZone
+      RecordSets:
+        # DKIM
+        # This is the public key matching a private key that Google Workspace
+        # uses to sign emails it send on our behalf
+        # https://admin.google.com/ac/apps/gmail/authenticateemail
+        - Name: !Sub google._domainkey.${Domain}
+          ResourceRecords:
+            - '"v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2EdVI2nGNdgPwnXA/EvM9hfmX3bOtvyrlGRfY4wLITxBEZtFT/5+IxkKUk3QRGyTEHlrnXtKqJPaK69ddtpw0noyGPiVHKIjUOQbFwSc7tZk2f5WNldQmIyPrDp1Zm2DbaHZIxzUM7yZI/wGltppn6oWScBnzbxn7m44D0DOff8G7toLy4ddKhrxJrzvccghl" "PwqOr5spruaeOnPYwKTIhsFpGxhqTyeURJRQ9oTHLwYjlmpczR4ajHzJ9l8hhYbUjpj4FLU4tsel+/NcxXWWNPjTwi/gZVbjIzrWbivuHljrFvTihECTmScrnDK84VruVFl2yv4Xa5+3q1fIM2tiwIDAQAB"'
+          TTL: "3600"
+          Type: TXT
+  Supercast:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      Comment: Supercast
+      HostedZoneId: !Ref HostedZone
+      RecordSets:
+        # DKIM
+        - Name: !Sub 20230914160105pm._domainkey.${Domain}
+          ResourceRecords:
+            - '"k=rsa;p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCO5isP/ztx0rwtKCzNOcuEsf43aN8+o7zMfcR4465HesHu/nKDYHE+XbRpaojkGp+MSqNZZ3mGQrgM+dOGRwNV5RxIF/uaxVIzsz8iAUgWEpLJ5TOFQSyD3aow6LfhTrX6Pmx5gwnMOEkVHQy2R0p3sMePH3wWbR1eyRNx5bYeqwIDAQAB"'
+          TTL: "3600"
+          Type: TXT
+        # Return-Path
+        - Name: !Sub pm-bounces.${Domain}
+          ResourceRecords:
+            - pm.mtasv.net
+          TTL: "3600"
+          Type: CNAME

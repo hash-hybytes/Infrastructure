@@ -2,116 +2,102 @@
 set -e
 set -a
 
-# If PRX_ECR_CONFIG_PARAMETERS is present, we try to push to ECR
+# Look for any Docker images labeled with "org.prx.spire.publish.ecr"
 push_to_ecr() {
-    if [ -n "$PRX_ECR_CONFIG_PARAMETERS" ]
-    then
-        if [ -z "$PRX_ECR_CONFIG_PARAMETERS" ]; then exit 1 "PRX_ECR_CONFIG_PARAMETERS required for ECR push"; fi
-        echo "Handling ECR push..."
+    echo ">>> Looking for publishable Docker images"
+    image_ids=$(docker images --filter "label=org.prx.spire.publish.ecr" --format "{{.ID}}")
 
-        echo "Logging into ECR..."
-        $(aws ecr get-login --no-include-email --region $AWS_DEFAULT_REGION)
-        echo "...Logged in to ECR"
+    if [ -z "$image_ids" ]; then
+        echo "< No Docker images found. Set the org.prx.spire.publish.ecr LABEL in a Dockerfile to publish its image."
+    else
+        for image_id in $image_ids; do
+            echo "> Publishing Docker image: $image_id..."
 
-        unsafe_ecr_repo_name="GitHub/${PRX_REPO}"
-        # Do any transformations necessary to satisfy ECR naming requirements:
-        # Start with letter, [a-z0-9-_/.] (maybe, docs are unclear)
-        safe_ecr_repo_name=$(echo "$unsafe_ecr_repo_name" | tr '[:upper:]' '[:lower:]')
+            label=$(docker inspect --format '{{ index .Config.Labels "org.prx.spire.publish.ecr"}}' "$image_id")
 
-        # Need to allow errors temporarily to check if the repo exists
-        set +e
-        aws ecr describe-repositories --repository-names "$safe_ecr_repo_name" > /dev/null 2>&1
-        if [ $? -eq 0 ]
-        then
-            echo "ECR Repository already exists"
-        else
-            echo "Creating ECR repository"
-            # TODO
-            # aws ecr create-repository --repository-name "$safe_ecr_repo_name"
-        fi
-        set -e
+            echo "> Logging into ECR"
+            aws ecr get-login-password --region "${AWS_DEFAULT_REGION}" | docker login --username AWS --password-stdin "${PRX_AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+            echo "> Logged in to ECR"
 
-        echo "Getting Docker image ID"
-        image_id=$(docker images --filter "label=org.prx.app" --format "{{.ID}}" | head -n 1)
+            unsafe_ecr_repo_name="GitHub/${PRX_REPO}"
+            # Do any transformations necessary to satisfy ECR naming requirements:
+            # Start with letter, [a-z0-9-_/.] (maybe, docs are unclear)
+            safe_ecr_repo_name=$(echo "$unsafe_ecr_repo_name" | tr '[:upper:]' '[:lower:]')
 
-        if [ -z "$image_id" ]; then
-            exit 1 "No Docker image found; ensure at least one Dockerfile has an org.prx.app label"
-        else
-            # Construct the image name with a tag
-            ecr_image_name="${PRX_AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${safe_ecr_repo_name}:${PRX_COMMIT}"
-            export PRX_ECR_IMAGE="$ecr_image_name"
+            # Need to allow errors temporarily to check if the repo exists
+            set +e
+            aws ecr describe-repositories --repository-names "$safe_ecr_repo_name" > /dev/null 2>&1
+            if [ $? -eq 0 ]
+            then
+                echo "> ECR Repository already exists"
+            else
+                echo "> Creating ECR repository"
+                aws ecr create-repository --repository-name "$safe_ecr_repo_name"
+            fi
+            set -e
 
-            echo "Pushing image $image_id to ECR $ecr_image_name..."
-            docker tag $image_id $ecr_image_name
-            docker push $ecr_image_name
-        fi
+            image_tag="${PRX_COMMIT}"
+            image_name="${safe_ecr_repo_name}"
+            tagged_image_name="${image_name}:${image_tag}"
+
+            ecr_domain="${PRX_AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+
+            full_image_uri="${ecr_domain}/${tagged_image_name}"
+
+            # Export a variable whose name is the LABEL from the Dockerfile,
+            # and whose value is the full image name with tag
+            # e.g., if there's a LABEL org.prx.spire.publish.docker="WEB_SERVER"
+            # this would set WEB_SERVER=1234.dkr.ecr.us-eas-1.amazonaws.com...
+            declare -gx "$label"="$tagged_image_name"
+
+            echo "> Pushing image $image_id to ECR $full_image_uri"
+            docker tag $image_id $full_image_uri
+            docker push $full_image_uri
+            echo "< Finished publishing Docker image"
+        done
     fi
 }
 
-# If the buildspec provides an S3 object key for Lambda code, the built code
-# from the CodeBuild needs to be pushed to that key in the standard Application
-# Code bucket provided by the Storage stack.
-push_to_s3_lambda() {
-    if [ -n "$PRX_LAMBDA_CODE_CONFIG_PARAMETERS" ]
-    then
-        if [ -z "$PRX_APPLICATION_CODE_BUCKET" ]; then exit 1 "PRX_APPLICATION_CODE_BUCKET required for Lambda code push"; fi
-        if [ -z "$PRX_LAMBDA_CODE_CONFIG_PARAMETERS" ]; then exit 1 "PRX_LAMBDA_CODE_CONFIG_PARAMETERS required for Lambda code push"; fi
-        if [ -z "$PRX_LAMBDA_ARCHIVE_BUILD_PATH" ]; then export PRX_LAMBDA_ARCHIVE_BUILD_PATH="/.prxci/build.zip" ; fi
-        echo "Handling Lambda code push..."
+# Look for any Docker images labeled with "org.prx.spire.publish.s3"
+push_to_s3() {
+    echo ">>> Looking for publishable ZIP files"
+    image_ids=$(docker images --filter "label=org.prx.spire.publish.s3" --format "{{.ID}}")
 
-        echo "Getting Docker image ID"
-        image_id=$(docker images --filter "label=org.prx.lambda" --format "{{.ID}}" | head -n 1)
+    if [ -z "$image_ids" ]; then
+        echo "< No Docker images found. Set the org.prx.spire.publish.s3 LABEL in a Dockerfile to publish a ZIP file."
+    else
+        for image_id in $image_ids; do
+            label=$(docker inspect --format '{{ index .Config.Labels "org.prx.spire.publish.s3"}}' "$image_id")
 
-        if [ -z "$image_id" ]; then
-            exit 1 "No Docker image found; ensure at least one Dockerfile has an org.prx.lambda label"
-        else
+            echo "> Publishing ZIP file for ${label} from Docker image: $image_id..."
+
+            if [ -z "$PRX_S3_ARCHIVE_BUILD_PATH" ]; then export PRX_S3_ARCHIVE_BUILD_PATH="/.prxci/build.zip" ; fi
+
+            # Create a container from the image that was made during the build.
+            # The code will be somewhere in that image as a ZIP file.
             container_id=$(docker create $image_id)
 
-            echo "Copying zip archive for Lambda source..."
-            docker cp $container_id:$PRX_LAMBDA_ARCHIVE_BUILD_PATH build.zip
+            # Copy the ZIP file out of the container into the local environment
+            # in a file called: send-to-s3.zip
+            echo "> Copying ZIP file $PRX_S3_ARCHIVE_BUILD_PATH from container $container_id"
+            docker cp $container_id:$PRX_S3_ARCHIVE_BUILD_PATH send-to-s3.zip
 
             cleaned=`docker rm $container_id`
 
-            echo "Sending zip archive to S3..."
-            key="GitHub/${PRX_REPO}/${PRX_COMMIT}.zip"
-            export PRX_LAMBDA_CODE_CONFIG_VALUE="$key"
-            aws s3api put-object --bucket $PRX_APPLICATION_CODE_BUCKET --key $key --acl private --body build.zip
-        fi
-    fi
-}
+            # Send send-to-s3.zip to S3 as a new object (not a version)
+            echo "> Sending ZIP file to S3"
+            key="GitHub/${PRX_REPO}/${PRX_COMMIT}/${label}.zip"
 
-#
-push_to_s3_static() {
-    if [ -n "$PRX_S3_STATIC_CONFIG_PARAMETERS" ]
-    then
-        if [ -z "$PRX_APPLICATION_CODE_BUCKET" ]; then exit 1 "PRX_APPLICATION_CODE_BUCKET required for S3 static code push"; fi
-        if [ -z "$PRX_S3_STATIC_CONFIG_PARAMETERS" ]; then exit 1 "PRX_S3_STATIC_CONFIG_PARAMETERS required for S3 static code push"; fi
-        if [ -z "$PRX_S3_STATIC_ARCHIVE_BUILD_PATH" ]; then export PRX_S3_STATIC_ARCHIVE_BUILD_PATH="/.prxci/build.zip" ; fi
-        echo "Handling S3 static code push..."
+            aws s3api put-object --bucket $PRX_APPLICATION_CODE_BUCKET --key $key --acl private --body send-to-s3.zip
+            echo "< Finished publishing ZIP file"
 
-        echo "Getting Docker image ID"
-        image_id=$(docker images --filter "label=org.prx.s3static" --format "{{.ID}}" | head -n 1)
-
-        if [ -z "$image_id" ]; then
-            exit 1 "No Docker image found; ensure at least one Dockerfile has an org.prx.s3static label"
-        else
-            container_id=$(docker create $image_id)
-
-            echo "Copying zip archive for S3 static source..."
-            docker cp $container_id:$PRX_S3_STATIC_ARCHIVE_BUILD_PATH build.zip
-
-            cleaned=`docker rm $container_id`
-
-            echo "Sending zip archive to S3..."
-            key="GitHub/${PRX_REPO}/${PRX_COMMIT}.zip"
-            export PRX_S3_STATIC_CONFIG_VALUE="$key"
-            aws s3api put-object --bucket $PRX_APPLICATION_CODE_BUCKET --key $key --acl private --body build.zip
-        fi
+            declare -gx "$label"="$key"
+        done
     fi
 }
 
 init() {
-    echo "Running post_build script..."
+    echo ">>>>> Running post_build script"
 
     ## Set by CodeBuild during the build
     if [ -z "$CODEBUILD_BUILD_SUCCEEDING" ]; then exit 1 "CODEBUILD_BUILD_SUCCEEDING required"; fi
@@ -119,24 +105,28 @@ init() {
     # Only do work if the build is succeeding to this point
     if [ $CODEBUILD_BUILD_SUCCEEDING -eq 0 ]
     then
-        echo "A previous CodeBuild phase did not succeed"
+        echo "< A previous CodeBuild phase did not succeed"
     else
-        # Check for required environment variables
-        ## Set on the CodeBuild project definition
+        # Check for required environment variables.
+        #### Set on the AWS::CodeBuild::Project in template.yml
         if [ -z "$PRX_AWS_ACCOUNT_ID" ]; then exit 1 "PRX_AWS_ACCOUNT_ID required"; fi
-        ## Set from startBuild
+        #### Set from startBuild (in build-handler Lambda)
         if [ -z "$PRX_REPO" ]; then exit 1 "PRX_REPO required"; fi
         if [ -z "$PRX_COMMIT" ]; then exit 1 "PRX_COMMIT required"; fi
 
         # Handle code publish if enabled
         if [ "$PRX_CI_PUBLISH" = "true" ]
         then
-            echo "Publishing code..."
+            echo "> Publishing code"
             push_to_ecr
-            push_to_s3_lambda
-            push_to_s3_static
+            push_to_s3
+        elif [ "$PRX_CI_PRERELEASE" = "true" ]
+        then
+            echo "> Pushing pre-release code"
+            push_to_ecr
+            push_to_s3
         else
-            echo "Code publishing is not enabled for this build"
+            echo "< Code publishing is not enabled for this build"
         fi
     fi
 }

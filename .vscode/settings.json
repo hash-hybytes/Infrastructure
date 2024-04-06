@@ -1,28 +1,22 @@
 {
-  "editor.insertSpaces": true,
-  "editor.tabSize": 2,
-  "editor.trimAutoWhitespace": true,
-  "files.insertFinalNewline": true,
-  "python.formatting.provider": "black",
-  "[makefile]": {
-    "editor.insertSpaces": false,
-    "editor.tabSize": 4
-  },
-  "[dockerfile]": {
-    "editor.tabSize": 4
-  },
   "[javascript]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode",
     "editor.formatOnSave": true,
-    "editor.formatOnSaveMode": "modifications"
+    "editor.formatOnSaveMode": "file"
   },
   "[yaml]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode",
-    "editor.formatOnSave": true
+    "editor.formatOnSave": true,
+    "editor.formatOnSaveMode": "file"
+  },
+  "[ruby]": {
+    "editor.defaultFormatter": "testdouble.vscode-standard-ruby",
+    "editor.formatOnSave": true,
+    "editor.formatOnSaveMode": "file"
   },
   "[python]": {
-    "editor.defaultFormatter": "ms-python.python",
+    "editor.defaultFormatter": "ms-python.black-formatter",
     "editor.formatOnSave": true,
-    "editor.tabSize": 4
+    "editor.formatOnSaveMode": "file"
   }
 }

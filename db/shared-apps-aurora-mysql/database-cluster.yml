@@ -50,11 +50,17 @@ Parameters:
     Type: AWS::EC2::Subnet::Id
   Subnet3Id:
     Type: AWS::EC2::Subnet::Id
-  InstanceSecurityGroupId:
+  ClientSecurityGroupId:
     Description: >-
-      The ID for a security group that EC2 instances which should have access
+      The ID for a security group that clients which should have access
       to the database belong to
     Type: String
+  InstanceCondition:
+    Type: String
+    AllowedValues:
+      - Normal
+      - Headless
+    Default: Normal
 
 # Mappings:
 #   EnvironmentTypeMap:
@@ -65,18 +71,39 @@ Parameters:
 
 Conditions:
   # IsProduction: !Equals [!Ref EnvironmentType, Production]
+  HasInstances: !Equals [!Ref InstanceCondition, "Normal"]
   HasGlobalClusterIdentifier: !Not [!Equals [!Ref GlobalClusterIdentifier, ""]]
   HasMasterUsername: !Not [!Equals [!Ref DbClusterMasterUsername, ""]]
   HasMasterUserPassword: !Not [!Equals [!Ref DbClusterMasterUserPassword, ""]]
   HasMasterUserCredentials: !And [!Condition HasMasterUsername, !Condition HasMasterUserPassword]
 
 Resources:
+  DbClusterParameterGroup:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      Description: !Sub ${AWS::StackName} cluster parameters
+      Family: aurora-mysql8.0
+      Parameters:
+        # https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-global-database-write-forwarding-ams.html#aurora-global-database-write-forwarding-params-ams
+        aurora_replica_read_consistency: GLOBAL
+      Tags:
+        - { Key: Name, Value: !Sub "${AWS::StackName}_shared-mysql-aurora" }
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:dev:application, Value: Common }
+
   DbCluster:
     Type: AWS::RDS::DBCluster
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
       # BackupRetentionPeriod
+      DBClusterParameterGroupName: !If
+        - HasGlobalClusterIdentifier # indicates a secondary cluster
+        - !Ref DbClusterParameterGroup
+        - !Ref AWS::NoValue
       DBSubnetGroupName: !Ref DbSubnetGroup
       DeletionProtection: true
       EnableCloudwatchLogsExports:
@@ -85,11 +112,15 @@ Resources:
         - general
         - slowquery
       Engine: aurora-mysql
-      EngineVersion: "5.7.mysql_aurora.2.10.0"
+      EngineVersion: "8.0.mysql_aurora.3.03.1"
       GlobalClusterIdentifier: !If
         - HasGlobalClusterIdentifier
         - !Ref GlobalClusterIdentifier
         - !Ref AWS::NoValue
+      EnableGlobalWriteForwarding: !If
+        - HasGlobalClusterIdentifier # indicates a secondary cluster
+        - true
+        - false
       MasterUsername: !If
         - HasMasterUserCredentials
         - !Ref DbClusterMasterUsername
@@ -113,6 +144,9 @@ Resources:
   DbInstance:
     Type: AWS::RDS::DBInstance
     DependsOn: DbSubnetGroup
+    Condition: HasInstances
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
     Properties:
       AllowMajorVersionUpgrade: false
       AutoMinorVersionUpgrade: true
@@ -169,15 +203,15 @@ Resources:
         - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
         - { Key: prx:dev:application, Value: Common }
       VpcId: !Ref SharedVpcId
-  DbClusterInstanceIngressIngress:
+  DbClusterClientIngress:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
       Description: >-
-        Allows ingress traffic from the shared ALB ASG instance security group
+        Allows ingress traffic from the client security group
       FromPort: 3306
       GroupId: !GetAtt DbClusterSecurityGroup.GroupId
       IpProtocol: tcp
-      SourceSecurityGroupId: !Ref InstanceSecurityGroupId
+      SourceSecurityGroupId: !Ref ClientSecurityGroupId
       ToPort: 3306
 
 Outputs:

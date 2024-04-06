@@ -39,7 +39,7 @@ Resources:
     Properties:
       CidrIp: 0.0.0.0/0
       Description: >-
-        Allows ingress traffic from all SSH traffic
+        Allows all inbound SSH traffic
       FromPort: 22
       GroupId: !GetAtt SolrInstanceSecurityGroup.GroupId
       IpProtocol: tcp
@@ -76,28 +76,29 @@ Resources:
         - !GetAtt SolrInstanceSecurityGroup.GroupId
       SubnetId: !Ref Subnet1Id
       Tags:
+        - { Key: Name, Value: !Sub "${AWS::StackName}_solr" }
         - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
         - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
         - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
         - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
         - { Key: prx:dev:application, Value: Exchange }
 
-  EbsVolume:
-    Type: AWS::EC2::Volume
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      AvailabilityZone: !GetAtt Ec2Instance.AvailabilityZone
-      Size: 8
-      Tags:
-        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
-        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
-        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
-        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
-        - { Key: prx:dev:application, Value: Exchange }
-  EbsVolumeAttachent:
-    Type: AWS::EC2::VolumeAttachment
-    Properties:
-      Device: /dev/xvdb
-      InstanceId: !Ref Ec2Instance
-      VolumeId: !Ref EbsVolume
+  # EbsVolume:
+  #   Type: AWS::EC2::Volume
+  #   DeletionPolicy: Retain
+  #   UpdateReplacePolicy: Retain
+  #   Properties:
+  #     AvailabilityZone: !GetAtt Ec2Instance.AvailabilityZone
+  #     Size: 8
+  #     Tags:
+  #       - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+  #       - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+  #       - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+  #       - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+  #       - { Key: prx:dev:application, Value: Exchange }
+  # EbsVolumeAttachent:
+  #   Type: AWS::EC2::VolumeAttachment
+  #   Properties:
+  #     Device: /dev/xvdb
+  #     InstanceId: !Ref Ec2Instance
+  #     VolumeId: !Ref EbsVolume

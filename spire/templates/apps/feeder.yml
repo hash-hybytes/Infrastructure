@@ -1,0 +1,1240 @@
+# stacks/apps/feeder.yml
+# 200A
+#
+# The names of the SQS queues created by this template are intended to
+# implicitly match some configuration that exists within the CMS application.
+# The only part of the queue names that is passed to the application is the
+# prefix; if the stems change in other the template or the app config, things
+# will not function as expected.
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Description: >-
+  Creates a dedicated load balancer and the ECS service for the public Feeder
+  web server. Also creates an ECS service for the Feeder workers.
+
+Parameters:
+  kWebContainerName:
+    Type: String
+    Default: feeder-web
+  kWorkerContainerName:
+    Type: String
+    Default: feeder-worker
+  kWebApplicationPort:
+    Type: Number
+    Default: 3000
+  kMetricFilterNamespace:
+    Type: String
+    Default: PRX/Feeder
+  #######
+  NestedChangeSetScrubbingResourcesState: { Type: String }
+  AlbFullName: { Type: String }
+  AlbHttpsListenerArn: { Type: String }
+  EcsClusterArn: { Type: String }
+  EnvironmentType: { Type: String }
+  EnvironmentTypeAbbreviation: { Type: String }
+  EnvironmentTypeLowercase: { Type: String }
+  RegionMode: { Type: String }
+  RootStackName: { Type: String }
+  RootStackId: { Type: String }
+  CloudWatchAlarmTaggerServiceToken: { Type: String }
+  EchoServiceToken: { Type: String }
+  S3SigningUserName: { Type: String }
+  S3SigningEndpointUrl: { Type: String }
+  S3SigningAccessKeyId: { Type: String }
+  VpcId: { Type: AWS::EC2::VPC::Id }
+  NewRelicApiKeyPrxLite: { Type: String }
+  EcrImageTag: { Type: AWS::SSM::Parameter::Value<String> }
+  AlbListenerRulePriorityPrefix: { Type: String }
+  SharedAppRedisEndpointAddress: { Type: String }
+  SharedAppRedisEndpointPort: { Type: String }
+  SharedAuroraPostgresqlEndpoint: { Type: String }
+  SharedAuroraPostgresqlPort: { Type: String }
+  AnnounceResourcePrefix: { Type: String }
+  PorterJobExecutionSnsTopicArn: { Type: String }
+  FeedsS3BucketArn: { Type: AWS::SSM::Parameter::Value<String> }
+  CastleHostname: { Type: String }
+  CmsHostname: { Type: String }
+  DovetailRouterHostname: { Type: String }
+  IdHostname: { Type: String }
+  PlayHostname: { Type: String }
+  BetaHostname: { Type: String }
+  FeederHostname: { Type: String }
+  FeederAssetsHostname: { Type: String }
+  FeederAuthProxyHostname: { Type: String }
+  FeederAuthProxyInternalHostname: { Type: String }
+  FeederCdnHostname: { Type: String }
+  PublicFeedsHostname: { Type: String }
+  DovetailAppleApiBridgeEndpointUrl: { Type: String }
+  SlackMessageRelaySnsTopicArn: { Type: String }
+
+Conditions:
+  IsProduction: !Equals [!Ref EnvironmentType, Production]
+  IsPrimaryRegion: !Equals [!Ref RegionMode, Primary]
+  HasAuroraEndpoint: !Not [!Equals [!Ref SharedAuroraPostgresqlEndpoint, ""]]
+  EnableWorkers: !And [!Condition HasAuroraEndpoint, !Condition IsPrimaryRegion]
+  EnableNestedChangeSetScrubbingResources: !Equals [!Ref NestedChangeSetScrubbingResourcesState, Enabled]
+
+Resources:
+  NestedChangeSetScrubber: { Type: AWS::SNS::Topic, Condition: EnableNestedChangeSetScrubbingResources }
+
+  Constants:
+    Type: Custom::Echo
+    Properties:
+      ServiceToken: !Ref EchoServiceToken
+      WorkerLoggedErrorsMetricName: !Sub WorkerLoggedErrors${EnvironmentType}
+      WebLoggedErrorsMetricName: !Sub WebLoggedErrors${EnvironmentType}
+      PublicFeedsUrlPrefix: !Sub https://${PublicFeedsHostname}/f
+
+  # The canonical address for this app is podcasts.dovetail.prx.org.
+  # API traffic to the old feeder.prx.org domain should continue to be handled
+  # directly.
+  # All other traffic to feeder.prx.org should redirect to the new domain.
+  HostHeaderListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - TargetGroupArn: !Ref WebTargetGroup2
+          Type: forward
+      Conditions:
+        - Field: host-header
+          Values:
+            - podcasts.dovetail.*
+      ListenerArn: !Ref AlbHttpsListenerArn
+      Priority: !Join ["", [!Ref AlbListenerRulePriorityPrefix, "01"]]
+  LegacyApiWildcardListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - TargetGroupArn: !Ref WebTargetGroup2
+          Type: forward
+      Conditions:
+        - Field: host-header
+          Values:
+            - feeder.*
+        - Field: path-pattern
+          Values:
+            - /api/*
+      ListenerArn: !Ref AlbHttpsListenerArn
+      Priority: !Join ["", [!Ref AlbListenerRulePriorityPrefix, "20"]]
+  LegacyApiRootListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - TargetGroupArn: !Ref WebTargetGroup2
+          Type: forward
+      Conditions:
+        - Field: host-header
+          Values:
+            - feeder.*
+        - Field: path-pattern
+          Values:
+            - /api
+      ListenerArn: !Ref AlbHttpsListenerArn
+      Priority: !Join ["", [!Ref AlbListenerRulePriorityPrefix, "21"]]
+  LegacyRedirectListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - RedirectConfig:
+            Host: !Ref FeederHostname
+            Path: "/#{path}"
+            Port: "#{port}"
+            Protocol: "#{protocol}"
+            Query: "#{query}"
+            StatusCode: "HTTP_301"
+          Type: redirect
+      Conditions:
+        - Field: host-header
+          Values:
+            - feeder.*
+      ListenerArn: !Ref AlbHttpsListenerArn
+      Priority: !Join ["", [!Ref AlbListenerRulePriorityPrefix, "99"]]
+
+  DefaultJobQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DelaySeconds: 0
+      MessageRetentionPeriod: 604800 # 7 days
+      QueueName: !Sub ${AnnounceResourcePrefix}_feeder_default
+      ReceiveMessageWaitTimeSeconds: 0
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DefaultJobDeadletterQueue.Arn
+        maxReceiveCount: 10
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+      VisibilityTimeout: 3600 # 1 hour
+  DefaultJobDeadletterQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DelaySeconds: 0
+      MessageRetentionPeriod: 604800 # 7 days
+      QueueName: !Sub ${AnnounceResourcePrefix}_feeder_default_failures
+      ReceiveMessageWaitTimeSeconds: 0
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+      VisibilityTimeout: 3600 # 1 hour
+  DefaultJobDeadletterQueueMessageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: IsProduction
+    Properties:
+      AlarmName: !Sub ERROR [Feeder] Default dead-letter queue <${EnvironmentTypeAbbreviation}> NOT EMPTY (${RootStackName})
+      AlarmDescription: !Sub >-
+        ${EnvironmentType} Feeder's dead-letter queue for the default callback
+        queue is not empty, which means some job callbacks were not
+        successfully processed.
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt DefaultJobDeadletterQueue.QueueName
+      EvaluationPeriods: 1
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Period: 60
+      Statistic: Average
+      Threshold: 0
+      TreatMissingData: notBreaching
+  DefaultJobDeadletterQueueMessageAlarmTags:
+    Type: Custom::CloudWatchAlarmTags
+    Condition: IsProduction
+    Properties:
+      ServiceToken: !Ref CloudWatchAlarmTaggerServiceToken
+      AlarmArn: !GetAtt DefaultJobDeadletterQueueMessageAlarm.Arn
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:ops:cloudwatch-log-group-name, Value: !Ref WorkerTaskLogGroup }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+
+  PublishingJobQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DelaySeconds: 0
+      MessageRetentionPeriod: 604800 # 7 days
+      QueueName: !Sub ${AnnounceResourcePrefix}_feeder_publishing
+      ReceiveMessageWaitTimeSeconds: 0
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt PublishingJobDeadletterQueue.Arn
+        maxReceiveCount: 10
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+      VisibilityTimeout: 3600 # 1 hour
+  PublishingJobDeadletterQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DelaySeconds: 0
+      MessageRetentionPeriod: 604800 # 7 days
+      QueueName: !Sub ${AnnounceResourcePrefix}_feeder_publishing_failures
+      ReceiveMessageWaitTimeSeconds: 0
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+      VisibilityTimeout: 3600 # 1 hour
+  PublishingJobDeadletterQueueMessageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: IsProduction
+    Properties:
+      AlarmName: !Sub ERROR [Feeder] Publishing dead-letter queue <${EnvironmentTypeAbbreviation}> NOT EMPTY (${RootStackName})
+      AlarmDescription: !Sub >-
+        ${EnvironmentType} Feeder's dead-letter queue for the publishing
+        queue is not empty, which means some publishing jobs are not being processed.
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt PublishingJobDeadletterQueue.QueueName
+      EvaluationPeriods: 1
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Period: 60
+      Statistic: Average
+      Threshold: 0
+      TreatMissingData: notBreaching
+  PublishingJobDeadletterQueueMessageAlarmTags:
+    Type: Custom::CloudWatchAlarmTags
+    Condition: IsProduction
+    Properties:
+      ServiceToken: !Ref CloudWatchAlarmTaggerServiceToken
+      AlarmArn: !GetAtt PublishingJobDeadletterQueueMessageAlarm.Arn
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:ops:cloudwatch-log-group-name, Value: !Ref WorkerTaskLogGroup }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+
+  FixerCallbackQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DelaySeconds: 0
+      MessageRetentionPeriod: 604800 # 7 days
+      QueueName: !Sub ${AnnounceResourcePrefix}_feeder_fixer_callback
+      ReceiveMessageWaitTimeSeconds: 0
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt FixerCallbackDeadletterQueue.Arn
+        maxReceiveCount: 10
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+      VisibilityTimeout: 3600 # 1 hour
+  FixerCallbackDeadletterQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DelaySeconds: 0
+      MessageRetentionPeriod: 604800 # 7 days
+      QueueName: !Sub ${AnnounceResourcePrefix}_feeder_fixer_callback_failures
+      ReceiveMessageWaitTimeSeconds: 0
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DefaultJobDeadletterQueue.Arn
+        maxReceiveCount: 10
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+      VisibilityTimeout: 3600 # 1 hour
+  FixerCallbackDeadletterQueueMessageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: IsProduction
+    Properties:
+      AlarmName: !Sub ERROR [Feeder] Fixer dead-letter queue <${EnvironmentTypeAbbreviation}> NOT EMPTY (${RootStackName})
+      AlarmDescription: !Sub >-
+        ${EnvironmentType} Feeder's dead-letter queue for the Fixer callback
+        queue is not empty, which means some Fixer or Porter job callbacks were
+        not successfully processed.
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt FixerCallbackDeadletterQueue.QueueName
+      EvaluationPeriods: 1
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Period: 60
+      Statistic: Average
+      Threshold: 0
+      TreatMissingData: notBreaching
+  FixerCallbackDeadletterQueueMessageAlarmTags:
+    Type: Custom::CloudWatchAlarmTags
+    Condition: IsProduction
+    Properties:
+      ServiceToken: !Ref CloudWatchAlarmTaggerServiceToken
+      AlarmArn: !GetAtt FixerCallbackDeadletterQueueMessageAlarm.Arn
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:ops:cloudwatch-log-group-name, Value: !Ref WorkerTaskLogGroup }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+  WebLoggedErrorsMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      FilterPattern: |-
+        { ($.level >= 50) && ($.level < 60) }
+      LogGroupName: !Ref WebTaskLogGroup
+      MetricTransformations:
+        - MetricName: !GetAtt Constants.WebLoggedErrorsMetricName
+          MetricNamespace: !Ref kMetricFilterNamespace
+          MetricValue: "1"
+  WebLoggedErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ERROR [Feeder] Web <${EnvironmentTypeAbbreviation}> IS LOGGING ERRORS (${RootStackName} 2)
+      AlarmDescription: !Sub >-
+        ${EnvironmentType} Feeder's web task has logged an error. Check the logs!
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 1
+      MetricName: !GetAtt Constants.WebLoggedErrorsMetricName
+      Namespace: !Ref kMetricFilterNamespace
+      Period: 300
+      Statistic: Sum
+      Threshold: 0
+      TreatMissingData: notBreaching
+  WebLoggedErrorsAlarmTags:
+    Type: Custom::CloudWatchAlarmTags
+    Properties:
+      ServiceToken: !Ref CloudWatchAlarmTaggerServiceToken
+      AlarmArn: !GetAtt WebLoggedErrorsAlarm.Arn
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:ops:cloudwatch-log-group-name, Value: !Ref WebTaskLogGroup }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+  WorkersLoggedErrorsMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      FilterPattern: |-
+        { ($.level >= 50) && ($.level < 60) }
+      LogGroupName: !Ref WorkerTaskLogGroup
+      MetricTransformations:
+        - MetricName: !GetAtt Constants.WorkerLoggedErrorsMetricName
+          MetricNamespace: !Ref kMetricFilterNamespace
+          MetricValue: "1"
+  WorkerLoggedErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ERROR [Feeder] Worker <${EnvironmentTypeAbbreviation}> IS LOGGING ERRORS (${RootStackName} 2)
+      AlarmDescription: !Sub >-
+        ${EnvironmentType} Feeder's worker task has logged an error. Check the logs!
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 1
+      MetricName: !GetAtt Constants.WorkerLoggedErrorsMetricName
+      Namespace: !Ref kMetricFilterNamespace
+      Period: 300
+      Statistic: Sum
+      Threshold: 0
+      TreatMissingData: notBreaching
+  WorkerLoggedErrorsAlarmTags:
+    Type: Custom::CloudWatchAlarmTags
+    Properties:
+      ServiceToken: !Ref CloudWatchAlarmTaggerServiceToken
+      AlarmArn: !GetAtt WorkerLoggedErrorsAlarm.Arn
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:ops:cloudwatch-log-group-name, Value: !Ref WorkerTaskLogGroup }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+        Version: "2012-10-17"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action: ssm:GetParameters
+                Effect: Allow
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/prx/${EnvironmentTypeAbbreviation}/Spire/Dovetail-Feeder/*
+                Sid: AllowAppParameterRead
+            Version: "2012-10-17"
+          PolicyName: ContainerSecrets
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+        Version: "2012-10-17"
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - sqs:ChangeMessageVisibility
+                  - sqs:DeleteMessage
+                  - sqs:Get*
+                  - sqs:List*
+                  - sqs:ReceiveMessage
+                  - sqs:SendMessage
+                Effect: Allow
+                Resource:
+                  - !GetAtt DefaultJobQueue.Arn
+                  - !GetAtt PublishingJobQueue.Arn
+                  - !GetAtt FixerCallbackQueue.Arn
+                Sid: AllowShoryuken
+            Version: "2012-10-17"
+          PolicyName: AppQueues
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - sqs:ChangeMessageVisibility
+                  - sqs:DeleteMessage
+                  - sqs:Get*
+                  - sqs:List*
+                  - sqs:ReceiveMessage
+                  - sqs:SendMessage
+                Effect: Allow
+                Resource: !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AnnounceResourcePrefix}_announce_feeder_*
+                Sid: AllowShoryuken
+            Version: "2012-10-17"
+          PolicyName: Announce
+        - PolicyDocument:
+            Statement:
+              - Action: sns:Publish
+                Effect: Allow
+                Resource: "*" # TODO permissive
+                Sid: AllowGlobalPublish
+            Version: "2012-10-17"
+          PolicyName: SNS
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - s3:Get*
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                  - s3:ListBucketVersions
+                Effect: Allow
+                Resource: !Ref FeedsS3BucketArn
+                Sid: AllowBucketActions
+              - Action:
+                  - s3:AbortMultipartUpload
+                  - s3:DeleteObject
+                  - s3:Get*
+                  - s3:ListMultipartUploadParts
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                  - s3:PutObjectVersionAcl
+                Effect: Allow
+                Resource: !Sub ${FeedsS3BucketArn}/*
+                Sid: AllowObjectActions
+            Version: "2012-10-17"
+          PolicyName: FeedsBucket
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+
+  WebTargetGroup2:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 15
+      HealthCheckPath: /api/v1
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 3
+      Port: 80
+      Protocol: HTTP
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+      Tags:
+        - { Key: Name, Value: !Sub "${RootStackName}_feeder" }
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+      UnhealthyThresholdCount: 3
+      VpcId: !Ref VpcId
+  WebTargetGroupHttp5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: IsProduction
+    Properties:
+      AlarmName: !Sub ERROR [Feeder] Web server <${EnvironmentTypeAbbreviation}> RETURNING 5XX ERRORS (${RootStackName})
+      AlarmDescription: !Sub >-
+        ${EnvironmentType} Feeder's Rails server is returning 5XX errors from
+        the ECS service to the load balancer.
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Ref AlbFullName
+        - Name: TargetGroup
+          Value: !GetAtt WebTargetGroup2.TargetGroupFullName
+      EvaluationPeriods: 1
+      MetricName: HTTPCode_Target_5XX_Count
+      Namespace: AWS/ApplicationELB
+      Period: 60
+      Statistic: Sum
+      Threshold: 0
+      TreatMissingData: notBreaching
+  WebTargetGroupHttp5xxAlarmTags:
+    Type: Custom::CloudWatchAlarmTags
+    Condition: IsProduction
+    Properties:
+      ServiceToken: !Ref CloudWatchAlarmTaggerServiceToken
+      AlarmArn: !GetAtt WebTargetGroupHttp5xxAlarm.Arn
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:ops:cloudwatch-log-group-name, Value: !Ref WebTaskLogGroup }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+
+  WebEcsService:
+    Type: AWS::ECS::Service
+    Condition: HasAuroraEndpoint # See README
+    Properties:
+      Cluster: !Ref EcsClusterArn
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 50
+      DesiredCount: !If [IsPrimaryRegion, !If [IsProduction, 5, 2], 0]
+      EnableECSManagedTags: true
+      LoadBalancers:
+        - ContainerName: !Ref kWebContainerName
+          ContainerPort: !Ref kWebApplicationPort
+          TargetGroupArn: !Ref WebTargetGroup2
+      PropagateTags: TASK_DEFINITION
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+      TaskDefinition: !Ref WebTaskDefinition
+  WebTaskLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      RetentionInDays: 14
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+  WebTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      ContainerDefinitions:
+        - Command:
+            - web
+          Cpu: !If [IsProduction, 200, 128]
+          Environment:
+            - Name: ANNOUNCE_RESOURCE_PREFIX
+              Value: !Ref AnnounceResourcePrefix
+            - Name: APPLE_API_BRIDGE_URL
+              Value: !Ref DovetailAppleApiBridgeEndpointUrl
+            - Name: ASSET_HOST
+              Value: !Ref FeederAssetsHostname
+            - Name: AWS_ACCOUNT_ID
+              Value: !Ref AWS::AccountId
+            - Name: AWS_DEFAULT_REGION
+              Value: !Ref AWS::Region
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: CASTLE_HOST
+              Value: !Ref CastleHostname
+            - Name: CMS_HOST
+              Value: !Ref CmsHostname
+            - Name: DATABASE_POOL_SIZE
+              Value: 16
+            - Name: DOVETAIL_HOST
+              Value: !Ref DovetailRouterHostname
+            - Name: FEEDER_CDN_HOST
+              Value: !Ref FeederCdnHostname
+            - Name: FEEDER_CDN_PRIVATE_HOST
+              Value: !Ref FeederAuthProxyHostname
+            - Name: FEEDER_HOST
+              Value: !Ref FeederHostname
+            - Name: ID_HOST
+              Value: !Ref IdHostname
+            - Name: NEW_RELIC_KEY
+              Value: !Ref NewRelicApiKeyPrxLite
+            - Name: NEW_RELIC_NAME
+              Value: !If [IsProduction, Feeder Production, Feeder Staging]
+            - Name: PLAY_HOST
+              Value: !Ref PlayHostname
+            - Name: PORT
+              Value: !Ref kWebApplicationPort
+            - Name: PORTER_SNS_TOPIC
+              Value: !Ref PorterJobExecutionSnsTopicArn
+            - Name: POSTGRES_HOST
+              Value: !Ref SharedAuroraPostgresqlEndpoint
+            - Name: POSTGRES_PORT
+              Value: !Ref SharedAuroraPostgresqlPort
+            - Name: PRX_HOST
+              Value: !Ref BetaHostname
+            - Name: PUBLIC_FEEDS_URL_PREFIX
+              Value: !GetAtt Constants.PublicFeedsUrlPrefix
+            - Name: RAILS_ENV
+              Value: !Ref EnvironmentTypeLowercase
+            - Name: REDIS_HOST
+              Value: !Ref SharedAppRedisEndpointAddress
+            - Name: REDIS_PORT
+              Value: !Ref SharedAppRedisEndpointPort
+            - Name: SLACK_CHANNEL_ID
+              Value: !If [IsProduction, CE9E6SSBW, ""]
+            - Name: SLACK_SNS_TOPIC
+              Value: !Ref SlackMessageRelaySnsTopicArn
+            - Name: UPLOAD_BUCKET_NAME
+              Value: !Ref FeederUploadsBucket
+            - Name: UPLOAD_S3_ENDPOINT_HOST
+              Value: !Sub ${FeederUploadsBucket}.s3-accelerate.dualstack.amazonaws.com
+            - Name: UPLOAD_SIGNING_SERVICE_KEY_ID
+              Value: !Ref S3SigningAccessKeyId
+            - Name: UPLOAD_SIGNING_SERVICE_URL
+              Value: !Ref S3SigningEndpointUrl
+          Essential: true
+          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EcrImageTag}
+          LinuxParameters:
+            InitProcessEnabled: true
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref WebTaskLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          Memory: !If [IsProduction, 2000, 1000]
+          MemoryReservation: !If [IsProduction, 1000, 500]
+          Name: !Ref kWebContainerName
+          PortMappings:
+            - ContainerPort: !Ref kWebApplicationPort
+              HostPort: 0
+          Secrets:
+            - Name: API_ADMIN_TOKENS
+              ValueFrom: !Sub /prx/${EnvironmentTypeAbbreviation}/Spire/Dovetail-Feeder/api-admin-tokens
+            # TODO: deprecated
+            - Name: FEEDS_TOKEN
+              ValueFrom: !Sub /prx/${EnvironmentTypeAbbreviation}/Spire/Dovetail-Feeder/feeds-token
+            - Name: POSTGRES_DATABASE
+              ValueFrom: !Sub /prx/${EnvironmentTypeAbbreviation}/Spire/Dovetail-Feeder/database-name
+            - Name: POSTGRES_PASSWORD
+              ValueFrom: !Sub /prx/${EnvironmentTypeAbbreviation}/Spire/Dovetail-Feeder/database-password
+            - Name: POSTGRES_USER
+              ValueFrom: !Sub /prx/${EnvironmentTypeAbbreviation}/Spire/Dovetail-Feeder/database-username
+            - Name: PRX_CLIENT_ID
+              ValueFrom: !Sub /prx/${EnvironmentTypeAbbreviation}/Spire/Dovetail-Feeder/id-auth-client-id
+            - Name: PRX_SECRET
+              ValueFrom: !Sub /prx/${EnvironmentTypeAbbreviation}/Spire/Dovetail-Feeder/id-auth-client-secret
+            - Name: SECRET_KEY_BASE
+              ValueFrom: !Sub /prx/${EnvironmentTypeAbbreviation}/Spire/Dovetail-Feeder/secret-key-base
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      NetworkMode: bridge
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+      TaskRoleArn: !GetAtt TaskRole.Arn
+
+  WorkerEcsService:
+    Type: AWS::ECS::Service
+    Condition: EnableWorkers # See README
+    Properties:
+      Cluster: !Ref EcsClusterArn
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 50
+      DesiredCount: 1
+      EnableECSManagedTags: true
+      PropagateTags: TASK_DEFINITION
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+      TaskDefinition: !Ref WorkerTaskDefinition
+  WorkerTaskLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      RetentionInDays: 14
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+  WorkerTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      ContainerDefinitions:
+        - Command:
+            - worker
+          Cpu: !If [IsProduction, 200, 128]
+          Environment:
+            - Name: ANNOUNCE_RESOURCE_PREFIX
+              Value: !Ref AnnounceResourcePrefix
+            - Name: APPLE_API_BRIDGE_URL
+              Value: !Ref DovetailAppleApiBridgeEndpointUrl
+            - Name: ASSET_HOST
+              Value: !Ref FeederAssetsHostname
+            - Name: AWS_ACCOUNT_ID
+              Value: !Ref AWS::AccountId
+            - Name: AWS_DEFAULT_REGION
+              Value: !Ref AWS::Region
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: CASTLE_HOST
+              Value: !Ref CastleHostname
+            - Name: CMS_HOST
+              Value: !Ref CmsHostname
+            - Name: DATABASE_POOL_SIZE
+              Value: !If [IsProduction, 16, 5]
+            - Name: DOVETAIL_HOST
+              Value: !Ref DovetailRouterHostname
+            - Name: FEEDER_CDN_HOST
+              Value: !Ref FeederCdnHostname
+            - Name: FEEDER_CDN_PRIVATE_HOST
+              Value: !Ref FeederAuthProxyHostname
+            - Name: FEEDER_HOST
+              Value: !Ref FeederHostname
+            - Name: ID_HOST
+              Value: !Ref IdHostname
+            - Name: NEW_RELIC_KEY
+              Value: !Ref NewRelicApiKeyPrxLite
+            - Name: NEW_RELIC_NAME
+              Value: !If [IsProduction, Feeder Production, Feeder Staging]
+            - Name: PLAY_HOST
+              Value: !Ref PlayHostname
+            - Name: PORTER_SNS_TOPIC
+              Value: !Ref PorterJobExecutionSnsTopicArn
+            - Name: POSTGRES_HOST
+              Value: !Ref SharedAuroraPostgresqlEndpoint
+            - Name: POSTGRES_PORT
+              Value: !Ref SharedAuroraPostgresqlPort
+            - Name: PRX_HOST
+              Value: !Ref BetaHostname
+            - Name: PUBLIC_FEEDS_URL_PREFIX
+              Value: !GetAtt Constants.PublicFeedsUrlPrefix
+            - Name: RAILS_ENV
+              Value: !Ref EnvironmentTypeLowercase
+            - Name: REDIS_HOST
+              Value: !Ref SharedAppRedisEndpointAddress
+            - Name: REDIS_PORT
+              Value: !Ref SharedAppRedisEndpointPort
+            - Name: SLACK_CHANNEL_ID
+              Value: !If [IsProduction, CE9E6SSBW, ""]
+            - Name: SLACK_SNS_TOPIC
+              Value: !Ref SlackMessageRelaySnsTopicArn
+            - Name: START_SAY_WHEN
+              Value: true
+            - Name: WORKER_COUNT
+              Value: !If [IsProduction, 8, 5]
+          Essential: true
+          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EcrImageTag}
+          LinuxParameters:
+            InitProcessEnabled: true
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref WorkerTaskLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          Memory: !If [IsProduction, 2000, 1000]
+          MemoryReservation: !If [IsProduction, 1000, 500]
+          Name: !Ref kWorkerContainerName
+          Secrets:
+            - Name: API_ADMIN_TOKENS
+              ValueFrom: !Sub /prx/${EnvironmentTypeAbbreviation}/Spire/Dovetail-Feeder/api-admin-tokens
+            # TODO: deprecated
+            - Name: FEEDS_TOKEN
+              ValueFrom: !Sub /prx/${EnvironmentTypeAbbreviation}/Spire/Dovetail-Feeder/feeds-token
+            - Name: POSTGRES_DATABASE
+              ValueFrom: !Sub /prx/${EnvironmentTypeAbbreviation}/Spire/Dovetail-Feeder/database-name
+            - Name: POSTGRES_PASSWORD
+              ValueFrom: !Sub /prx/${EnvironmentTypeAbbreviation}/Spire/Dovetail-Feeder/database-password
+            - Name: POSTGRES_USER
+              ValueFrom: !Sub /prx/${EnvironmentTypeAbbreviation}/Spire/Dovetail-Feeder/database-username
+            - Name: PRX_CLIENT_ID
+              ValueFrom: !Sub /prx/${EnvironmentTypeAbbreviation}/Spire/Dovetail-Feeder/id-auth-client-id
+            - Name: PRX_SECRET
+              ValueFrom: !Sub /prx/${EnvironmentTypeAbbreviation}/Spire/Dovetail-Feeder/id-auth-client-secret
+            - Name: SECRET_KEY_BASE
+              ValueFrom: !Sub /prx/${EnvironmentTypeAbbreviation}/Spire/Dovetail-Feeder/secret-key-base
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      NetworkMode: bridge
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+      TaskRoleArn: !GetAtt TaskRole.Arn
+
+  # bucket for temporary S3 uploads from Feeder UI
+  FeederUploadsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AccelerateConfiguration:
+        AccelerationStatus: Enabled
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - "*"
+            AllowedMethods:
+              - DELETE
+              - GET
+              - HEAD
+              - POST
+              - PUT
+            AllowedOrigins:
+              - "*"
+            ExposedHeaders:
+              - ETag
+              - Content-Type
+              - Content-Length
+              - Date
+            MaxAge: 3000
+      LifecycleConfiguration:
+        Rules:
+          - ExpirationInDays: 7
+            Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+  FeederUploadsBucketUploadSignerPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - s3:GetBucketAcl
+              - s3:GetBucketLocation
+              - s3:ListBucket
+              - s3:ListBucketMultipartUploads
+            Effect: Allow
+            Resource: !GetAtt FeederUploadsBucket.Arn
+          - Action:
+              - s3:AbortMultipartUpload
+              - s3:GetObject
+              - s3:GetObjectAcl
+              - s3:ListMultipartUploadParts
+              - s3:PutObject
+              - s3:PutObjectAcl
+            Effect: Allow
+            Resource: !Sub ${FeederUploadsBucket.Arn}/*
+        Version: "2012-10-17"
+      PolicyName: FeederUploadsBucketAccess
+      Users:
+        - !Ref S3SigningUserName
+
+  AuthProxyHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      Description: !Sub Feeder ${EnvironmentType} private feed proxy service
+      DisableExecuteApiEndpoint: false
+      Tags:
+        prx:meta:tagging-version: "2021-04-07"
+        prx:cloudformation:stack-name: !Ref AWS::StackName
+        prx:cloudformation:stack-id: !Ref AWS::StackId
+        prx:cloudformation:root-stack-name: !Ref RootStackName
+        prx:cloudformation:root-stack-id: !Ref RootStackId
+        prx:ops:environment: !Ref EnvironmentType
+        prx:dev:family: Dovetail
+        prx:dev:application: Feeder
+  AuthProxyHttpLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: !Sub Feeder ${EnvironmentType} private feed proxy server
+      Environment:
+        Variables:
+          PUBLIC_FEED_DOMAIN: !Ref FeederCdnHostname
+      Events:
+        ApiRootRequest:
+          Properties:
+            ApiId: !Ref AuthProxyHttpApi
+            Method: any
+            Path: /
+            PayloadFormatVersion: "1.0"
+          Type: HttpApi
+        ApiDeepRequest:
+          Properties:
+            ApiId: !Ref AuthProxyHttpApi
+            Method: any
+            Path: /{proxy+}
+            PayloadFormatVersion: "1.0"
+          Type: HttpApi
+      Handler: index.handler
+      InlineCode: |
+        const http = require('http');
+        const text = (statusCode = 200, body = 'ok', maxAge = 0) => {
+          const headers = {
+            'Content-Type': 'text/plain',
+            'Cache-Control': `public, max-age=${maxAge}`,
+          };
+          return { statusCode, body, headers };
+        };
+
+        exports.handler = async (event) => {
+          if (!event.queryStringParameters || !event.queryStringParameters.auth) {
+            return text(403, 'nope, no feed for you!', 300);
+          }
+
+          const resp = await new Promise((resolve) => {
+            http.get(`http://${process.env.PUBLIC_FEED_DOMAIN}${event.path}`, resolve);
+          });
+          if (resp.statusCode !== 200) {
+            return text(404, 'Not Found', 300);
+          }
+          if (!(resp.headers['content-type'] || '').match(/application\/(rss\+)?xml/)) {
+            return text(404, 'Not Feed', 300);
+          }
+
+          const data = await new Promise((resolve, reject) => {
+            let chunks = '';
+            resp.on('data', (chunk) => (chunks += chunk));
+            resp.on('error', (err) => reject(err));
+            resp.on('end', () => resolve(chunks));
+          });
+
+          const auth = event.queryStringParameters.auth;
+          const body = data.replace(
+            /<enclosure url="([^"]+)"/g,
+            `<enclosure url="$1?auth=${auth}"`,
+          ).replace(/{\?auth}"/g, `?auth=${auth}"`);
+          const headers = {
+            'Content-Type': resp.headers['content-type'],
+            'Cache-Control': `public, max-age=300`,
+          };
+          return { statusCode: 200, body, headers };
+        };
+      MemorySize: 192
+      Runtime: nodejs18.x
+      Tags:
+        prx:meta:tagging-version: "2021-04-07"
+        prx:cloudformation:stack-name: !Ref AWS::StackName
+        prx:cloudformation:stack-id: !Ref AWS::StackId
+        prx:cloudformation:root-stack-name: !Ref RootStackName
+        prx:cloudformation:root-stack-id: !Ref RootStackId
+        prx:ops:environment: !Ref EnvironmentType
+        prx:dev:family: Dovetail
+        prx:dev:application: Feeder
+      Timeout: 30
+  AuthProxyHttpLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AuthProxyHttpLambdaFunction}
+      RetentionInDays: 14
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+  AuthProxyHttpLambdaElevatedErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: IsProduction
+    Properties:
+      AlarmName: !Sub WARN [Feeder] Private feed proxy <${EnvironmentTypeAbbreviation}> INVOCATIONS ERRORS (${RootStackName})
+      AlarmDescription: !Sub >-
+        ${EnvironmentType} Feeder Private Feed Proxy Lambda function is failing.
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref AuthProxyHttpLambdaFunction
+      EvaluationPeriods: 1
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Period: 60
+      Statistic: Sum
+      Threshold: 0
+      TreatMissingData: notBreaching
+  ProxyHttpLambdaElevatedErrorAlarmTags:
+    Type: Custom::CloudWatchAlarmTags
+    Condition: IsProduction
+    Properties:
+      ServiceToken: !Ref CloudWatchAlarmTaggerServiceToken
+      AlarmArn: !GetAtt AuthProxyHttpLambdaElevatedErrorAlarm.Arn
+      Tags:
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+
+  ExternalCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref FeederAuthProxyHostname
+      Tags:
+        - { Key: Name, Value: !Sub "${RootStackName}_feeder_auth" }
+        - { Key: prx:meta:tagging-version, Value: "2021-04-07" }
+        - { Key: prx:cloudformation:stack-name, Value: !Ref AWS::StackName }
+        - { Key: prx:cloudformation:stack-id, Value: !Ref AWS::StackId }
+        - { Key: prx:cloudformation:root-stack-name, Value: !Ref RootStackName }
+        - { Key: prx:cloudformation:root-stack-id, Value: !Ref RootStackId }
+        - { Key: prx:ops:environment, Value: !Ref EnvironmentType }
+        - { Key: prx:dev:family, Value: Dovetail }
+        - { Key: prx:dev:application, Value: Feeder }
+      ValidationMethod: DNS
+
+  # Creates an association between p.[staging.]prxu.org and the
+  # API Gateway. This association can be created once per region.
+  # This association allows for a CNAME to be made between p.[staging.]prxu.org
+  # and p.[staging.]u.prx.tech, the latter of which provides latency-based
+  # routing for the app between regions.
+  ExternalDomainName:
+    Type: AWS::ApiGatewayV2::DomainName
+    Properties:
+      DomainName: !Ref FeederAuthProxyHostname
+      DomainNameConfigurations:
+        - CertificateArn: !Ref ExternalCertificate
+      Tags:
+        prx:meta:tagging-version: "2021-04-07"
+        prx:cloudformation:stack-name: !Ref AWS::StackName
+        prx:cloudformation:stack-id: !Ref AWS::StackId
+        prx:cloudformation:root-stack-name: !Ref RootStackName
+        prx:cloudformation:root-stack-id: !Ref RootStackId
+        prx:ops:environment: !Ref EnvironmentType
+        prx:dev:family: Dovetail
+        prx:dev:application: Feeder
+  ExternalApiMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    Properties:
+      ApiId: !Ref AuthProxyHttpApi
+      DomainName: !Ref ExternalDomainName
+      Stage: !Ref AuthProxyHttpApiApiGatewayDefaultStage
+
+  # Creates DNS records for p.[staging.]u.prx.tech, which alias to the
+  # regional domain name for the domain association for p.[staging.]prxu.org.
+  # This allows for p.[staging.].prxu.org to resolve to p.[staging.]u.prx.tech,
+  # and have p.[staging.]u.prx.tech return the IP for an endpoint that
+  # is associated with p.[staging.].prxu.org.
+  # There is no API Gateway domain association for p.[staging.]u.prx.tech
+  # itself, so that domain is not functional, in any way other than as a DNS
+  # CNAME target.
+  InternalDomainNameRecordSetGroup:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      Comment: Record sets for auth proxy server API
+      HostedZoneName: prx.tech.
+      RecordSets:
+        - AliasTarget:
+            DNSName: !GetAtt ExternalDomainName.RegionalDomainName
+            EvaluateTargetHealth: true
+            HostedZoneId: !GetAtt ExternalDomainName.RegionalHostedZoneId
+          Name: !Ref FeederAuthProxyInternalHostname
+          Region: !Ref AWS::Region
+          SetIdentifier: !Ref AWS::StackName
+          Type: A
+        - AliasTarget:
+            DNSName: !GetAtt ExternalDomainName.RegionalDomainName
+            EvaluateTargetHealth: true
+            HostedZoneId: !GetAtt ExternalDomainName.RegionalHostedZoneId
+          Name: !Ref FeederAuthProxyInternalHostname
+          Region: !Ref AWS::Region
+          SetIdentifier: !Ref AWS::StackName
+          Type: AAAA
+
+Outputs:
+  WebTargetGroupFullName:
+    Value: !GetAtt WebTargetGroup2.TargetGroupFullName
+  AuthApiDefaultEndpoint:
+    Value: !Sub https://${AuthProxyHttpApi}.execute-api.${AWS::Region}.amazonaws.com
+  AuthApiId:
+    Value: !Ref AuthProxyHttpApi

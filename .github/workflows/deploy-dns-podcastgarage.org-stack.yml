@@ -1,0 +1,38 @@
+name: Deploy podcastgarage.org DNS
+
+# Continuously deploys dns/podcastgarage.org-hosted_zone.yml
+
+on:
+  push:
+    branches: [main]
+    paths: [dns/podcastgarage.org-hosted_zone.yml]
+
+concurrency:
+  group: ${{ github.workflow }}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-east-1
+          role-to-assume: arn:aws:iam::561178107736:role/DevOps-GitHubOidcFederatedRole
+          role-session-name: GitHubActions-DeployPodcastgarageOrgStack
+
+      - name: Deploy CloudFormation Stack
+        working-directory: dns
+        run: |
+          aws cloudformation deploy \
+            --no-fail-on-empty-changeset \
+            --region us-east-1 \
+            --stack-name hostedzone-podcastgarage-org \
+            --template-file podcastgarage.org-hosted_zone.yml

@@ -3,62 +3,24 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Creates the standard S3 buckets that are necessary for launching the rest of
   the infrastructure
+
 Parameters:
   BucketNamePrefix:
     Type: String
+
 Resources:
   # S3 Buckets
-  InfrastructureSupportBucket:
-    Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      BucketName: !Sub ${BucketNamePrefix}-${AWS::Region}-support
-      Tags:
-        - Key: Project
-          Value: Infrastructure
-        - Key: "prx:cloudformation:stack-name"
-          Value: !Ref AWS::StackName
-        - Key: "prx:cloudformation:stack-id"
-          Value: !Ref AWS::StackId
-      VersioningConfiguration:
-        Status: Suspended
-  InfrastructureSourceBucket:
-    Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      BucketName: !Sub ${BucketNamePrefix}-${AWS::Region}-source
-      Tags:
-        - Key: Project
-          Value: Infrastructure
-        - Key: "prx:cloudformation:stack-name"
-          Value: !Ref AWS::StackName
-        - Key: "prx:cloudformation:stack-id"
-          Value: !Ref AWS::StackId
-      VersioningConfiguration:
-        Status: Suspended
-  InfrastructureConfigBucket:
-    Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      BucketName: !Sub ${BucketNamePrefix}-${AWS::Region}-config
-      Tags:
-        - Key: Project
-          Value: Infrastructure
-        - Key: "prx:cloudformation:stack-name"
-          Value: !Ref AWS::StackName
-        - Key: "prx:cloudformation:stack-id"
-          Value: !Ref AWS::StackId
-      VersioningConfiguration:
-        Status: Enabled
   InfrastructureSnapshotsBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
       BucketName: !Sub ${BucketNamePrefix}-${AWS::Region}-snapshots
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
       Tags:
         - Key: Project
           Value: Infrastructure
@@ -69,11 +31,18 @@ Resources:
       VersioningConfiguration:
         Status: Suspended
   InfrastructureApplicationCodeBucket:
+    # CI publishes S3 objects (zip files usually) to this bucket, and this is
+    # where they get deployed from
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
       BucketName: !Sub ${BucketNamePrefix}-${AWS::Region}-application-code
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
       Tags:
         - Key: Project
           Value: Infrastructure
@@ -83,26 +52,8 @@ Resources:
           Value: !Ref AWS::StackId
       VersioningConfiguration:
         Status: Enabled
+
 Outputs:
-  InfrastructureSupportBucket:
-    Value: !Ref InfrastructureSupportBucket
-    Export:
-      Name: !Sub ${AWS::StackName}-InfrastructureSupportBucket
-  InfrastructureSourceBucket:
-    Value: !Ref InfrastructureSourceBucket
-    Export:
-      Name: !Sub ${AWS::StackName}-InfrastructureSourceBucket
-  InfrastructureSourceBucketUrl:
-    Description: >-
-      The complete S3 URL for the Source bucket (e.g.,
-      https://acme-us-west-2-source.s3.dualstack.us-west-2.amazonaws.com/)
-    Value: !Sub https://${InfrastructureSourceBucket.DualStackDomainName}/
-    Export:
-      Name: !Sub ${AWS::StackName}-SourceBucketUrl
-  InfrastructureConfigBucket:
-    Value: !Ref InfrastructureConfigBucket
-    Export:
-      Name: !Sub ${AWS::StackName}-InfrastructureConfigBucket
   InfrastructureSnapshotsBucket:
     Value: !Ref InfrastructureSnapshotsBucket
     Export:
